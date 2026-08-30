@@ -556,12 +556,15 @@ function paintDoctorKpis(doc) {
   (doc.checks || []).forEach((c) => { map[c.name] = c; });
   $("doctor-kpis").innerHTML = want.map((name) => {
     const c = map[name];
+    // A check that isn't in the response wasn't run in this scope — say so,
+    // instead of "?" which reads as "we tried and couldn't tell".
     const st = c ? c.status : "unknown";
     const cls = st === "ok" ? "accent" : st === "fail" ? "danger" : "warn";
+    const sub = c ? c.detail : `skipped in ${S.doctorScope} scope`;
     return `<div class="panel kpi ${cls}">
       <div class="k-label">${esc(name)}</div>
-      <div class="k-value">${esc(c ? c.glyph : "?")}</div>
-      <div class="k-sub">${esc(c ? c.detail : "not run")}</div>
+      <div class="k-value">${esc(c ? c.glyph : "—")}</div>
+      <div class="k-sub">${esc(sub)}</div>
     </div>`;
   }).join("");
 }
@@ -635,8 +638,10 @@ function fillOverlayRuns() {
 }
 
 async function loadRun(id) {
+  // Do NOT call show("runs") here: show() already calls loadRun when
+  // entering the runs view, so calling back would re-enter endlessly,
+  // rebuilding the <video> elements each time (flicker, stuck 0:00).
   S.selectedRun = id;
-  show("runs");
   const d = await api("/api/runs/" + encodeURIComponent(id));
   $("run-detail").hidden = false;
   $("run-detail-title").textContent = d.id;
@@ -795,8 +800,8 @@ function setDoctorScope(scope) {
     ? "Renderer scope skips torch. Draw and overlay work here."
     : "Model scope: torch, tribev2, uvx, disk, HuggingFace. Llama is gated.";
 }
-$("scope-renderer").addEventListener("click", () => setDoctorScope("renderer"));
-$("scope-model").addEventListener("click", () => setDoctorScope("model"));
+$("scope-renderer").addEventListener("click", () => { setDoctorScope("renderer"); runDoctor(); });
+$("scope-model").addEventListener("click", () => { setDoctorScope("model"); runDoctor(); });
 $("btn-doctor").addEventListener("click", runDoctor);
 $("btn-render").addEventListener("click", () => {
   const kind = $("r-kind").value;
