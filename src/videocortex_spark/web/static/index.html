@@ -393,15 +393,21 @@ table.data td.dim { color: var(--dim); }
           <input class="input" id="o-dps" type="number" min="12" max="48" value="24">
         </div>
         <div class="full">
+          <label class="rf-label">Events JSON (optional)</label>
+          <input class="input" id="o-events" type="text" placeholder="runs/clip/events.json — unexpected windows on the stimulus clock">
+        </div>
+        <div class="full">
           <label class="chk"><input type="checkbox" id="o-spin"> 3D spinning globe (both hemispheres, yaw-only)</label>
           <label class="chk"><input type="checkbox" id="o-monitor" checked> medical-monitor bezel</label>
           <label class="chk"><input type="checkbox" id="o-ribbon" checked> energy ribbon + playhead</label>
           <label class="chk"><input type="checkbox" id="o-regions" checked> name top brain regions</label>
+          <label class="chk"><input type="checkbox" id="o-sonify"> sonify (cortex bed mixed under the original audio)</label>
           <label class="chk"><input type="checkbox" id="o-fast"> NVENC encode</label>
           <label class="chk"><input type="checkbox" id="o-force"> rebuild cards / atlas</label>
         </div>
       </div>
       <p class="hint">Needs predictions.npy on the run. Spin writes overlay_spin.mp4 so it does not clobber the 2×2 overlay.</p>
+      <p class="hint">With an events file the overlay gets the caption: TRIBE predicts cortical drive from the pixels. It does not predict what a viewer counting passes will notice. Encoding is not attention.</p>
       <button class="btn primary mt" type="button" id="btn-overlay">Start overlay</button>
       <div class="launch-msg" id="msg-overlay"></div>
     </div>
@@ -652,6 +658,7 @@ async function loadRun(id) {
   const vids = [];
   if (m.overlay) vids.push(`<div><div class="rf-label">overlay.mp4</div><video class="thumb" controls src="${esc(m.overlay)}"></video></div>`);
   if (m.overlay_spin) vids.push(`<div><div class="rf-label">overlay_spin.mp4</div><video class="thumb" controls src="${esc(m.overlay_spin)}"></video></div>`);
+  if (m.cortex) vids.push(`<div><div class="rf-label">cortex.wav — |predicted BOLD| as loudness</div><audio controls src="${esc(m.cortex)}"></audio></div>`);
   $("run-detail-body").innerHTML = `
     <p class="hint">${esc(d.stimulus || "stimulus")} · ${fmt(d.n_timesteps)} TRs · ${fmt(d.n_vertices)} verts · ${fmt(d.seconds)}s encode</p>
     ${sheet}
@@ -660,6 +667,7 @@ async function loadRun(id) {
       <div>
         <button class="btn primary" type="button" id="btn-brain-this"${d.has_predictions ? "" : " disabled"}>3D brain</button>
         <button class="btn ghost" type="button" id="btn-overlay-this">Overlay this run</button>
+        <button class="btn ghost" type="button" id="btn-sonify-this"${d.has_predictions ? "" : " disabled"}>Sonify this run</button>
         <span class="hint" id="brain-msg"></span>
       </div>
       <button class="btn danger" type="button" id="btn-delete-this">Delete run</button>
@@ -687,6 +695,11 @@ async function loadRun(id) {
   if (btn) btn.addEventListener("click", () => {
     $("o-run").value = d.id;
     show("launch");
+  });
+  const son = $("btn-sonify-this");
+  if (son) son.addEventListener("click", () => {
+    $("brain-msg").textContent = "sonifying…";
+    postJob("/api/jobs/sonify", { run: d.id }, $("brain-msg"));
   });
   const del = $("btn-delete-this");
   if (del) del.addEventListener("click", () => deleteRun(d.id));
@@ -830,6 +843,8 @@ $("btn-overlay").addEventListener("click", () => {
     monitor: $("o-monitor").checked,
     ribbon: $("o-ribbon").checked,
     regions: $("o-regions").checked,
+    sonify: $("o-sonify").checked,
+    events: $("o-events").value.trim(),
     fast: $("o-fast").checked,
     force: $("o-force").checked,
   }, $("msg-overlay"));

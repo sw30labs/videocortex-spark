@@ -338,6 +338,56 @@ class TestWebAPI:
         assert captured["dps"] == 18.0
         assert captured["out"].endswith("overlay_spin.mp4")
 
+    def test_sonify_job_lifecycle(self, server, run_tree):
+        np.save(run_tree["run"] / "timestamps.npy", np.arange(3) * 1.49)
+        seen = {}
+
+        def handler(kind, params):
+            seen["kind"] = kind
+            seen["params"] = params
+            return {"wav": "runs/demo/cortex.wav"}
+
+        runner.set_job_handler(handler)
+        status, body = post(server, "/api/jobs/sonify", {"run": "demo"})
+        assert status == 202
+        _wait_idle()
+        assert seen["kind"] == "sonify"
+        assert seen["params"]["run"] == "demo"
+
+    def test_sonify_requires_timestamps(self, server, run_tree):
+        status, body = post(server, "/api/jobs/sonify", {"run": "demo"})
+        assert status == 400
+        assert "timestamps" in body["error"]
+
+    def test_overlay_events_path_must_exist(self, server, run_tree):
+        status, body = post(
+            server,
+            "/api/jobs/overlay",
+            {"run": "demo", "events": "/no/such/events.json"},
+        )
+        assert status == 400
+        assert "events" in body["error"]
+
+    def test_overlay_events_and_sonify_pass_through(self, server, run_tree):
+        events = run_tree["run"] / "events.json"
+        events.write_text(json.dumps({"schema": "videocortex.events.v1"}))
+        captured = {}
+
+        def handler(kind, params):
+            captured.update(params)
+            return {"out": params["out"], "n_cards": 1}
+
+        runner.set_job_handler(handler)
+        status, _ = post(
+            server,
+            "/api/jobs/overlay",
+            {"run": "demo", "events": str(events), "sonify": True},
+        )
+        assert status == 202
+        _wait_idle()
+        assert captured["events"] == str(events.resolve())
+        assert captured["sonify"] is True
+
     def test_second_job_is_409(self, server, run_tree):
         gate = threading.Event()
 

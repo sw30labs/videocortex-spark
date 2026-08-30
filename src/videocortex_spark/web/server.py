@@ -179,7 +179,7 @@ class DeckHandler(BaseHTTPRequestHandler):
         export_run = None
         if path.startswith("/api/runs/") and path.endswith("/export"):
             export_run = unquote(path[len("/api/runs/"):-len("/export")])
-        if path not in ("/api/jobs/render", "/api/jobs/overlay") and export_run is None:
+        if path not in ("/api/jobs/render", "/api/jobs/overlay", "/api/jobs/sonify") and export_run is None:
             self.send_error(404, "Not found")
             return
         if not _client_is_loopback(self):
@@ -206,6 +206,8 @@ class DeckHandler(BaseHTTPRequestHandler):
             return
         if path.endswith("/render"):
             job_id, error = runner.start_render_job(body)
+        elif path.endswith("/sonify"):
+            job_id, error = runner.start_sonify_job(body)
         else:
             job_id, error = runner.start_overlay_job(body)
         if error:
