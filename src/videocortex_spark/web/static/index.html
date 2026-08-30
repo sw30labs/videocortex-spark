@@ -604,7 +604,7 @@ function paintRuns() {
     <td class="dim">${esc(r.stimulus || "—")}</td>
     <td class="mono">${fmt(r.n_timesteps)} TR</td>
     <td class="mono">${fmt(r.seconds)}s</td>
-    <td>${r.has_overlay ? "PIP" : "—"} ${r.has_overlay_spin ? "spin" : ""}</td>
+    <td>${r.has_overlay ? "PIP" : "—"} ${r.has_overlay_spin ? "spin" : ""} ${r.has_brain ? "3D" : ""}</td>
     <td class="dim">${esc((r.mtime || "").replace("T", " ").replace("+00:00", "Z"))}</td>
     <td><button class="btn danger" type="button" data-delete="${esc(r.id)}">delete</button></td>
   </tr>`).join("");
@@ -652,9 +652,32 @@ async function loadRun(id) {
     ${sheet}
     <div class="media-row mt">${vids.join("")}</div>
     <div class="mt control-bar">
-      <button class="btn ghost" type="button" id="btn-overlay-this">Overlay this run</button>
+      <div>
+        <button class="btn primary" type="button" id="btn-brain-this"${d.has_predictions ? "" : " disabled"}>3D brain</button>
+        <button class="btn ghost" type="button" id="btn-overlay-this">Overlay this run</button>
+        <span class="hint" id="brain-msg"></span>
+      </div>
       <button class="btn danger" type="button" id="btn-delete-this">Delete run</button>
     </div>`;
+  const brain = $("btn-brain-this");
+  if (brain) brain.addEventListener("click", async () => {
+    brain.disabled = true;
+    $("brain-msg").textContent = "packing mesh + " + fmt(d.n_timesteps) + " TRs…";
+    try {
+      const res = await api("/api/runs/" + encodeURIComponent(d.id) + "/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      $("brain-msg").textContent = res.cached ? "already packed" : "packed " + ((res.n_bytes || 0) / 1e6).toFixed(1) + " MB";
+      window.open(res.brain, "_blank", "noopener");
+      refresh();
+    } catch (err) {
+      $("brain-msg").textContent = err.message;
+    } finally {
+      brain.disabled = false;
+    }
+  });
   const btn = $("btn-overlay-this");
   if (btn) btn.addEventListener("click", () => {
     $("o-run").value = d.id;

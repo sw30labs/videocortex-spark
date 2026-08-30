@@ -51,8 +51,13 @@ Inference already saved `predictions.npy`. Re-render for free:
 videocortex-spark overlay --run runs/some_clip
 videocortex-spark overlay --run runs/some_clip --spin
 videocortex-spark overlay --run runs/some_clip --fast    # NVENC if ffmpeg has it
+videocortex-spark export --run runs/some_clip            # interactive 3-D brain.html
 videocortex-spark draw runs/some_clip/predictions.npy --views full
 ```
+
+`brain.html` is the show-and-tell artifact: one file, the whole run, a
+WebGL brain you can orbit and scrub. It opens from disk; no server, no
+dependencies.
 
 ## 4. Read it honestly
 

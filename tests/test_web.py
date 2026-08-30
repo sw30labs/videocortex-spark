@@ -25,6 +25,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+import numpy as np
 
 from videocortex_spark.web import runner
 from videocortex_spark.web.server import (
@@ -378,6 +379,71 @@ class TestWebAPI:
     def test_post_rejects_non_json(self, server):
         status, body = post(server, "/api/jobs/render", b"nope", content_type="text/plain")
         assert status == 415
+
+
+class TestExportAPI:
+    """brain.html: the self-contained 3-D viewer, straight from the deck.
+
+    ``regions: false`` keeps these off the Destrieux download — the bundled
+    fsaverage5 mesh is the real thing, the atlas is not.
+    """
+
+    @pytest.fixture
+    def real_run(self, server, run_tree):
+        preds = np.random.default_rng(0).normal(0, 1, (4, 20484)).astype("float32")
+        np.save(run_tree["run"] / "predictions.npy", preds)
+        np.save(run_tree["run"] / "timestamps.npy", np.arange(4, dtype=float))
+        return run_tree
+
+    def test_export_unknown_run_is_404(self, server, run_tree):
+        status, body = post(server, "/api/runs/ghost/export", {})
+        assert status == 404
+        assert "unknown run" in body["error"]
+
+    def test_export_needs_predictions(self, server, run_tree):
+        (run_tree["run"] / "predictions.npy").unlink()
+        status, body = post(server, "/api/runs/demo/export", {})
+        assert status == 400
+        assert "predictions" in body["error"]
+
+    def test_export_builds_caches_and_serves(self, server, real_run):
+        status, body = post(server, "/api/runs/demo/export", {"regions": False})
+        assert status == 200
+        assert body["brain"] == "/media/runs/demo/brain.html"
+        assert body["cached"] is False
+        assert (real_run["run"] / "brain.html").is_file()
+
+        # unchanged run → cache hit, no repack
+        status, body = post(server, "/api/runs/demo/export", {})
+        assert status == 200 and body["cached"] is True
+
+        # the file serves as real html over /media/
+        status, raw, headers = get_raw(server, "/media/runs/demo/brain.html")
+        assert status == 200
+        assert headers["Content-Type"].startswith("text/html")
+        assert b"vcx-data" in raw
+
+        # and the runs listing now flags it
+        _, runs, _ = get(server, "/api/runs")
+        demo = next(r for r in runs["runs"] if r["id"] == "demo")
+        assert demo["has_brain"] is True
+
+    def test_export_force_rebuilds(self, server, real_run):
+        post(server, "/api/runs/demo/export", {"regions": False})
+        status, body = post(server, "/api/runs/demo/export", {"force": True, "regions": False})
+        assert status == 200 and body["cached"] is False
+
+    def test_export_uses_manifest_colour_defaults(self, server, real_run):
+        man_path = real_run["run"] / "manifest.json"
+        man = json.loads(man_path.read_text(encoding="utf-8"))
+        man["render"] = {"cmap": "cold_hot", "percentile": 90.0, "threshold_frac": 0.4}
+        man_path.write_text(json.dumps(man), encoding="utf-8")
+        status, _ = post(server, "/api/runs/demo/export", {"regions": False})
+        assert status == 200
+        html = (real_run["run"] / "brain.html").read_text(encoding="utf-8")
+        data = json.loads(re.search(r'id="vcx-data">(.*?)</script>', html, re.S).group(1))
+        assert data["percentile"] == 90.0
+        assert data["threshold"] == pytest.approx(data["vmax"] * 0.4)
 
 
 # -- security --------------------------------------------------------------

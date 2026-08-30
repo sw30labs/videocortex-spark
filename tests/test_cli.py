@@ -92,3 +92,63 @@ def test_serve_flags():
     assert a.port == 9001
     assert a.no_browser is True
     assert str(a.runs) == "/tmp/runs"
+
+
+def test_export_parses_run_and_flags():
+    a = build_parser().parse_args(
+        ["export", "--run", "runs/clip", "--percentile", "95", "--no-regions"]
+    )
+    assert a.command == "export"
+    assert str(a.run) == "runs/clip"
+    assert a.predictions is None
+    assert a.percentile == 95.0
+    assert a.no_regions is True
+    assert a.out is None
+
+
+def test_export_accepts_a_positional_predictions_path():
+    a = build_parser().parse_args(["export", "runs/clip/predictions.npy", "-o", "b.html"])
+    assert str(a.predictions) == "runs/clip/predictions.npy"
+    assert str(a.out) == "b.html"
+
+
+def test_export_cli_needs_run_or_predictions(capsys):
+    from videocortex_spark.cli import main
+
+    assert main(["export"]) == 2
+    assert "--run" in capsys.readouterr().err
+
+
+def test_export_cli_inherits_manifest_render_defaults(tmp_path, monkeypatch):
+    """cmd_export must reuse the run's colour choices, not house defaults."""
+    import json
+
+    import numpy as np
+
+    run = tmp_path / "clip"
+    run.mkdir()
+    np.save(run / "predictions.npy", np.zeros((2, 20484), dtype=np.float32))
+    np.save(run / "timestamps.npy", np.array([0.0, 1.49]))
+    (run / "manifest.json").write_text(
+        json.dumps({"render": {"cmap": "viridis", "percentile": 90.0,
+                               "threshold_frac": 0.4, "ramp_frac": 0.1}}),
+        encoding="utf-8",
+    )
+    seen = {}
+    monkeypatch.setattr(
+        "videocortex_spark.export.export_viewer",
+        lambda preds, out, **kw: seen.update(kw, out=out, shape=preds.shape)
+        or type("R", (), {"path": out, "n_tr": 2, "n_vertices": 20484,
+                          "n_bytes": 1, "regions": True})(),
+    )
+    from videocortex_spark.cli import main
+
+    assert main(["export", "--run", str(run)]) == 0
+    assert seen["cmap"] == "viridis"
+    assert seen["percentile"] == 90.0
+    assert seen["threshold_frac"] == 0.4
+    assert seen["ramp_frac"] == 0.1
+    assert seen["timestamps"] == [0.0, 1.49]
+    assert seen["title"] == "clip"
+    assert seen["out"] == run / "brain.html"
+    assert seen["shape"] == (2, 20484)

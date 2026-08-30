@@ -1,12 +1,13 @@
 """Command line interface.
 
-Six verbs:
+Seven verbs:
 
     doctor   what's broken before you waste an hour finding out
     fetch    pull every weight up front
     render   video -> brain-map stills
     draw     saved predictions -> brain-map stills (no model needed)
     overlay  saved run + source video -> PIP animation
+    export   saved predictions -> one self-contained interactive 3-D brain
     serve    loopback command deck
 """
 
@@ -159,6 +160,29 @@ def build_parser() -> argparse.ArgumentParser:
              "atlas cannot be fetched)",
     )
 
+    # -- export ------------------------------------------------------------
+    x = sub.add_parser(
+        "export",
+        help="one self-contained interactive 3-D brain (brain.html) — no model needed",
+    )
+    x.add_argument(
+        "predictions", type=Path, nargs="?", default=None,
+        help="predictions.npy (default: the --run's)",
+    )
+    x.add_argument(
+        "--run", type=Path, default=None,
+        help="run directory; reads timestamps.npy and manifest.json render defaults",
+    )
+    x.add_argument("-o", "--out", type=Path, default=None,
+                   help="default: <run>/brain.html")
+    x.add_argument("--cmap", default=None)
+    x.add_argument("--percentile", type=float, default=None)
+    x.add_argument("--threshold-frac", type=float, default=None)
+    x.add_argument("--ramp-frac", type=float, default=None)
+    x.add_argument("--no-regions", action="store_true",
+                   help="skip the Destrieux region table (also skipped automatically "
+                        "if the atlas cannot be fetched)")
+
     # -- serve -------------------------------------------------------------
     s = sub.add_parser("serve", help="loopback command deck (stdlib HTTP)")
     s.add_argument("--host", default="127.0.0.1")
@@ -289,6 +313,71 @@ def cmd_draw(a: argparse.Namespace) -> int:
     return 0
 
 
+def _manifest_render_defaults(man_path: Path) -> dict:
+    """The ``render`` block of a run's manifest.json, or {} — so export
+    inherits the colour choices the run was actually made with."""
+    if not man_path.is_file():
+        return {}
+    import json
+
+    try:
+        return json.loads(man_path.read_text(encoding="utf-8")).get("render") or {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def cmd_export(a: argparse.Namespace) -> int:
+    import numpy as np
+
+    from videocortex_spark.export import export_viewer
+
+    if a.run is None and a.predictions is None:
+        print("ERROR: give --run DIR or a predictions.npy path", file=sys.stderr)
+        return 2
+    side = a.run if a.run is not None else a.predictions.parent
+    pred_path = (a.run / "predictions.npy") if a.run is not None else a.predictions
+    if not pred_path.is_file():
+        print(f"ERROR: no predictions at {pred_path}", file=sys.stderr)
+        return 1
+
+    defaults = _manifest_render_defaults(side / "manifest.json")
+    cmap = a.cmap or defaults.get("cmap") or "cold_hot"
+    percentile = a.percentile
+    if percentile is None:
+        percentile = float(defaults.get("percentile") or 99.0)
+    threshold_frac = a.threshold_frac
+    if threshold_frac is None:
+        threshold_frac = float(defaults.get("threshold_frac") or 0.25)
+    ramp_frac = a.ramp_frac
+    if ramp_frac is None:
+        ramp_frac = float(defaults.get("ramp_frac", 0.5))
+
+    ts_path = side / "timestamps.npy"
+    timestamps = None
+    if ts_path.is_file():
+        timestamps = [float(t) for t in np.load(ts_path)]
+
+    out = a.out or side / "brain.html"
+    preds = np.load(pred_path)
+    result = export_viewer(
+        preds,
+        out,
+        timestamps=timestamps,
+        title=side.name,
+        cmap=cmap,
+        percentile=percentile,
+        threshold_frac=threshold_frac,
+        ramp_frac=ramp_frac,
+        regions=not a.no_regions,
+        progress=lambda msg: print(f"  … {msg}", flush=True),
+    )
+    print(f"\n  3-D viewer  ->  {result.path}  ({result.n_bytes / 1e6:.1f} MB)")
+    print(f"  {result.n_tr} TRs × {result.n_vertices} vertices"
+          f"{'' if result.regions else ' (no region table)'}"
+          " — open it in any browser, it needs nothing else\n")
+    return 0
+
+
 def cmd_serve(a: argparse.Namespace) -> int:
     from videocortex_spark.web.server import serve
 
@@ -397,6 +486,7 @@ def main(argv: list[str] | None = None) -> int:
         "render": cmd_render,
         "draw": cmd_draw,
         "overlay": cmd_overlay,
+        "export": cmd_export,
         "serve": cmd_serve,
     }
     return handlers[args.command](args)

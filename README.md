@@ -156,6 +156,9 @@ videocortex-spark overlay --run runs/clip
 videocortex-spark overlay --run runs/clip --spin
 # → runs/clip/overlay.mp4  (PIP animation, every TR, audio copied)
 
+videocortex-spark export --run runs/clip
+# → runs/clip/brain.html  (interactive 3-D viewer, one self-contained file)
+
 videocortex-spark serve                    # loopback command deck, http://127.0.0.1:8730
 ```
 
@@ -177,7 +180,28 @@ Destrieux surface atlas is in `~/nilearn_data`.
 The deck is a stdlib HTTP page (no FastAPI, no extra web deps). It binds
 loopback, pins the `Host` header, and refuses non-loopback peers on `/api/`
 and `/media/`. Doctor, launch encode/overlay, browse runs, watch the one
-job.
+job — and per run, a **3D brain** button that packs the run into the
+interactive viewer below and opens it in a tab.
+
+### The 3-D export
+
+`export` turns a run into a **single self-contained `brain.html`**: the
+fsaverage5 inflated mesh, the whole prediction matrix (uint8-quantised at
+the run-wide scale), the colour LUT, and the Destrieux region table, plus a
+dependency-free WebGL viewer inlined in the page. No server, no CDN, no
+build step — double-click the file, email it, project it.
+
+- Drag to orbit, wheel to zoom, shift-drag to pan; touch works.
+- Space plays the TR series (interpolated), arrows step, `R` resets.
+- The phosphor strip is the whole-run energy curve with a playhead —
+  click it to scrub.
+- **Click any vertex** and its time course appears on the strip, signed,
+  with its Destrieux region name in the corner.
+- Colour limits are the run's own (inherited from `manifest.json`,
+  overridable with `--percentile` / `--threshold-frac` / `--ramp-frac` /
+  `--cmap`). Same scale everywhere, as always.
+- Atlas unreachable? It ships without region names and says so; the brain
+  still works.
 
 ### Options worth knowing
 
@@ -234,10 +258,11 @@ sitting idle.
 
 ```
 src/videocortex_spark/
-├── cli.py         six verbs: doctor, fetch, render, draw, overlay, serve
+├── cli.py         seven verbs: doctor, fetch, render, draw, overlay, export, serve
 ├── config.py      RunConfig / RenderConfig / OverlayConfig, view presets
 ├── device.py      CUDA (else CPU). Refuses a CUDA-12 wheel that looks empty.
 ├── doctor.py      preflight checks, including UMA / ptxas / NVENC
+├── export.py      run -> brain.html: one file, interactive 3-D, zero deps
 ├── model.py       loads TRIBE v2 with Spark batch/worker/bf16 overrides
 ├── overlay.py     PIP animation; --fast is NVENC
 ├── patches.py     whisperx uvx pin, Triton ptxas, Llama SDPA+bf16

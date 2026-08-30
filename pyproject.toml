@@ -52,7 +52,7 @@ PortingGuide = "https://docs.nvidia.com/dgx/dgx-spark-porting-guide/"
 where = ["src"]
 
 [tool.setuptools.package-data]
-videocortex_spark = ["web/static/*"]
+videocortex_spark = ["web/static/*", "export_template.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

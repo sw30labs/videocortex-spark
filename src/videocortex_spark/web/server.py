@@ -176,7 +176,10 @@ class DeckHandler(BaseHTTPRequestHandler):
 
     def _post(self) -> None:
         path = self.path.split("?", 1)[0]
-        if path not in ("/api/jobs/render", "/api/jobs/overlay"):
+        export_run = None
+        if path.startswith("/api/runs/") and path.endswith("/export"):
+            export_run = unquote(path[len("/api/runs/"):-len("/export")])
+        if path not in ("/api/jobs/render", "/api/jobs/overlay") and export_run is None:
             self.send_error(404, "Not found")
             return
         if not _client_is_loopback(self):
@@ -187,6 +190,19 @@ class DeckHandler(BaseHTTPRequestHandler):
             return
         body = self._read_json_body()
         if body is None:
+            return
+        if export_run is not None:
+            # A few seconds of CPU, no model — synchronous like /api/doctor.
+            payload, error = runner.export_brain(
+                export_run,
+                force=bool(body.get("force")),
+                regions=runner._as_bool(body.get("regions"), True),
+            )
+            if error:
+                status = 404 if error == "unknown run" else 400
+                self._send_json({"error": error}, status=status)
+            else:
+                self._send_json(payload, status=200)
             return
         if path.endswith("/render"):
             job_id, error = runner.start_render_job(body)
