@@ -70,9 +70,15 @@ def _vertex_normals(coords: np.ndarray, faces: np.ndarray) -> np.ndarray:
 
 
 def _normalise_sulc(sulc: np.ndarray) -> np.ndarray:
-    """Sulcal map → uint8 in [0, 255], robust 1st–99th percentile stretch."""
+    """Sulcal map → uint8 [0, 255], min-max like nilearn's ``_normalize_bg_data``.
+
+    The viewer applies ``gray_r`` (grey = 255 − value), which is how nilearn
+    turns sulc into the dark-sulci / light-gyri relief on the plates. A
+    percentile stretch here instead of the plain min-max would wash the
+    grooves out — the texture *is* the 3-D on an inflated mesh.
+    """
     s = np.asarray(sulc, dtype=np.float32)
-    lo, hi = (float(v) for v in np.percentile(s, (1.0, 99.0)))
+    lo, hi = float(np.nanmin(s)), float(np.nanmax(s))
     if hi <= lo:
         return np.zeros(s.shape, dtype=np.uint8)
     return (np.clip((s - lo) / (hi - lo), 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)

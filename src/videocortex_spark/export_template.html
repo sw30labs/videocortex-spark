@@ -242,12 +242,14 @@ var FSH = [
   "varying vec3 vN;",
   "void main() {",
   "  vec3 n = normalize(vN);",
-  "  vec3 l = normalize(vec3(0.40, 0.55, 0.72));",
-  "  float dif = max(dot(n, l), 0.0) + 0.18 * max(dot(-n, l), 0.0);",
-  "  vec3 h = normalize(l + vec3(0.0, 0.0, 1.0));",
-  "  float spec = pow(max(dot(n, h), 0.0), 28.0) * 0.16 * (0.25 + 0.75 * vCol.a);",
-  "  float rim = pow(1.0 - abs(n.z), 3.0) * 0.09;",
-  "  vec3 col = vCol.rgb * (0.36 + 0.64 * dif) + vec3(spec) + rim * vec3(0.35, 0.85, 0.85);",
+  // matplotlib mplot3d's exact recipe (art3d._shade_colors): the surface
+  // colour is multiplied by 0.3..1.0 of dot(n, light) — it only darkens,
+  // never brightens, which is why the plates read as grey matter and not
+  // pearl. Light sits upper-left-front in view space, so orbiting walks the
+  // shading across the folds.
+  "  vec3 l = normalize(vec3(-0.5, 0.55, 0.68));",
+  "  float shade = 0.65 + 0.35 * dot(n, l);",
+  "  vec3 col = vCol.rgb * clamp(shade, 0.0, 1.0);",
   "  gl_FragColor = vec4(col, 1.0);",
   "}",
 ].join("\n");
@@ -315,6 +317,18 @@ S.panY = -0.08 * RADIUS;
 
 var SPEEDS = [2, 6, 12, 24];
 
+// Shareable pose: brain.html#yaw=0.5&pitch=1.1&t=12 (t in TRs; pauses).
+(function () {
+  var m = {};
+  (location.hash || "").replace(/^#/, "").split("&").forEach(function (kv) {
+    var p = kv.split("=");
+    if (p.length === 2) m[p[0]] = parseFloat(p[1]);
+  });
+  if (isFinite(m.yaw)) S.yaw = m.yaw;
+  if (isFinite(m.pitch)) S.pitch = Math.max(-1.45, Math.min(1.45, m.pitch));
+  if (isFinite(m.t)) { S.t = Math.max(0, Math.min(N_TR - 1, m.t)); S.playing = false; }
+})();
+
 // ------------------------------------------------------------ colorise ----
 
 // Mirrors render.soft_threshold_cmap exactly: one run-wide vmax, alpha
@@ -336,12 +350,16 @@ function colorize(tPos) {
                      : Math.min(1, Math.max(0, (ax - RAMP_LO) / span));
       var li = (x / VMAX * 0.5 + 0.5) * 255;
       li = li < 0 ? 0 : li > 255 ? 255 : li | 0;
-      var g = 0.26 + 0.52 * (sulc[v] / 255);
+      // nilearn's recipe: grey = gray_r(sulc) — dark sulci, light gyri — and
+      // bg_on_data caps the data colour at 0.7 so the grooves show through
+      // even the hottest blob. Without both, the mesh reads as flat plastic.
+      var g = (255 - sulc[v]) / 255;
+      var am = a * 0.7;
       var o = v * 4, lut = LUT[li];
-      col[o]     = g * (1 - a) + lut[0] * a;
-      col[o + 1] = g * (1 - a) + lut[1] * a;
-      col[o + 2] = g * (1 - a) + lut[2] * a;
-      col[o + 3] = a;
+      col[o]     = g * (1 - am) + lut[0] * am;
+      col[o + 1] = g * (1 - am) + lut[1] * am;
+      col[o + 2] = g * (1 - am) + lut[2] * am;
+      col[o + 3] = am;
     }
   }
 }
@@ -472,6 +490,7 @@ function drawColorbar() {
     var x = (i / (w - 1) * 2 - 1) * VMAX;
     var ax = Math.abs(x);
     var a = hard ? (ax >= THR ? 1 : 0) : Math.min(1, Math.max(0, (ax - RAMP_LO) / span));
+    a *= 0.7;   // the surface caps data alpha at 0.7 (bg_on_data) — so does the bar
     var li = Math.round((x / VMAX * 0.5 + 0.5) * 255);
     var lut = LUT[Math.max(0, Math.min(255, li))];
     ctx.fillStyle = "rgba(" + Math.round(lut[0] * 255) + "," + Math.round(lut[1] * 255) +
