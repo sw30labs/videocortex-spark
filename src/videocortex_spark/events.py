@@ -139,6 +139,41 @@ def caption_lines() -> tuple[str, str, str]:
     )
 
 
+def _caption_font() -> str:
+    """matplotlib bundles DejaVu — one font that exists wherever we run."""
+    import matplotlib
+
+    return str(Path(matplotlib.get_data_path()) / "fonts" / "ttf" / "DejaVuSans.ttf")
+
+
+def render_caption_png(path: Path, width_px: int) -> Path:
+    """The honesty sentence as a full-width lower-third PNG (transparent bg).
+
+    Rendered with PIL, not ffmpeg drawtext — drawtext needs libfreetype,
+    which not every ffmpeg build ships; an overlay input always works.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    fs = max(16, int(width_px / 72))
+    line_h = int(fs * 1.5)
+    pad = int(fs * 0.8)
+    lines = caption_lines()
+    band_h = line_h * len(lines) + 2 * pad
+    img = Image.new("RGBA", (int(width_px), band_h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([0, 0, int(width_px), band_h], fill=(0, 0, 0, 140))
+    font = ImageFont.truetype(_caption_font(), fs)
+    for i, ln in enumerate(lines):
+        draw.text(
+            (width_px / 2, pad + line_h * (i + 0.5)), ln,
+            font=font, anchor="mm", fill=(255, 255, 255, 235),
+        )
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(path)
+    return path
+
+
 # Tick strip colours, RGBA. Amber band = the walker was on screen; the pale
 # tick = a human said something. Neither is derived from predictions.
 _TICK_BAND = np.array([0xF5, 0xB0, 0x41, 0xC0], dtype=np.uint8)

@@ -745,6 +745,7 @@ def build_contact_sheet(
     vmax: float,
     threshold: float,
     stims: tp.Mapping[int, np.ndarray] | None = None,
+    caption: str | None = None,
 ) -> Path | None:
     """Tile the panel renders into one overview — the thing you actually share.
 
@@ -752,6 +753,8 @@ def build_contact_sheet(
     so the sheet carries a single colourbar instead of repeating it in every
     cell. When ``stims`` is given, each tile grows a filmstrip frame of the
     stimulus at that moment: stimulus above, brain below, in reading order.
+    ``caption`` is a footer line under the colourbar — the events honesty
+    sentence when --events is in play, nothing otherwise.
     """
     if not len(tiles):
         return None
@@ -766,6 +769,7 @@ def build_contact_sheet(
     tile_h = tile_w * th / tw
 
     label_h, bar_h = 0.26, 0.7
+    cap_h = 0.34 if caption else 0.0
     stims = stims or {}
     # The strip shares the tile width; give it the stimulus' own aspect
     # (capped so a 16:9 grab doesn't dwarf the brain).
@@ -782,7 +786,7 @@ def build_contact_sheet(
 
     cell_h = tile_h + label_h + strip_h
     grid_h = rows * cell_h
-    total_h = grid_h + bar_h
+    total_h = grid_h + bar_h + cap_h
     total_w = cols * tile_w
 
     fig = plt.figure(figsize=(total_w, total_h))
@@ -791,7 +795,7 @@ def build_contact_sheet(
     for i, (tile, label) in enumerate(zip(tiles, labels)):
         r, c = divmod(i, cols)
         x0 = c / cols
-        y0 = (bar_h + (rows - 1 - r) * cell_h) / total_h
+        y0 = (cap_h + bar_h + (rows - 1 - r) * cell_h) / total_h
         # A gutter between columns: without it two adjacent four-panel tiles
         # read as one eight-panel row.
         gut = _SHEET_GUTTER / cols if cols > 1 else 0.0
@@ -814,9 +818,15 @@ def build_contact_sheet(
         )
 
     _colorbar(
-        fig, [0.40, (0.42 * bar_h) / total_h, 0.20, 0.16 * bar_h / total_h],
+        fig, [0.40, (cap_h + 0.42 * bar_h) / total_h, 0.20, 0.16 * bar_h / total_h],
         cfg, vmax=vmax, threshold=threshold, fg=fg, label_size=8,
     )
+
+    if caption:
+        fig.text(
+            0.5, 0.3 * cap_h / total_h, caption,
+            color=fg, fontsize=8.5, ha="center", va="bottom", alpha=0.85,
+        )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=110, facecolor=bg)
@@ -917,7 +927,7 @@ def render_series(
                 logger.warning("filmstrip skipped: %s", exc)
         sheet = build_contact_sheet(
             tiles, labels, out_dir.parent / "contact_sheet.png", cfg,
-            vmax=vmax, threshold=threshold, stims=stims,
+            vmax=vmax, threshold=threshold, stims=stims, caption=cfg.caption,
         )
 
     return RenderOutput(

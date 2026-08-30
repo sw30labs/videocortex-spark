@@ -167,6 +167,138 @@ def test_overlay_from_run_refuses_audio_only_manifest(tmp_path):
         overlay_from_run(tmp_path, OverlayConfig())
 
 
+def test_overlay_config_without_events_is_today():
+    """No --events -> no caption, no ticks, no cortex: bit-identical config."""
+    cfg = OverlayConfig()
+    assert cfg.events is None
+    assert cfg.caption is True  # only consulted when events are present
+    assert cfg.sonify is False
+    assert cfg.sonify_only is False
+
+
+def _lavfi_clip(path: Path, seconds: float = 2.0, audio: bool = False) -> Path:
+    cmd = [
+        "ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=blue:s=640x360:d={seconds}",
+    ]
+    if audio:
+        cmd += ["-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}"]
+        cmd += ["-c:a", "aac"]
+    cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-t", str(seconds), str(path)]
+    subprocess.run(cmd, check=True, capture_output=True)
+    return path
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not on PATH")
+def test_overlay_from_run_missing_events_is_a_hard_error(tmp_path):
+    src = _lavfi_clip(tmp_path / "src.mp4", 2.0)
+    run = tmp_path / "run"
+    run.mkdir()
+    np.save(run / "predictions.npy", np.zeros((2, 8), dtype=np.float32))
+    np.save(run / "timestamps.npy", np.array([0.0, 1.0]))
+    with pytest.raises(OverlayError, match="events file not found"):
+        overlay_from_run(
+            run, OverlayConfig(events=tmp_path / "nope.json"), video=src
+        )
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not on PATH")
+def test_caption_lands_in_the_lower_third(tmp_path):
+    """Same compose with and without the caption: the lower third must differ."""
+    from videocortex_spark.events import render_caption_png
+    from videocortex_spark.overlay import compose_ffmpeg, _write_blank_png
+
+    src = _lavfi_clip(tmp_path / "src.mp4", 1.0)
+    card = tmp_path / "card.png"
+    _write_blank_png(card, 32, 32)
+    concat = write_concat(tmp_path / "c.txt", [card], np.array([1.0]))
+    caption_png = render_caption_png(tmp_path / "caption.png", 640)
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.image as mpimg
+
+    means = []
+    for name, cap in (("plain", None), ("captioned", caption_png)):
+        out = tmp_path / f"{name}.mp4"
+        compose_ffmpeg(
+            video=src, concat=concat, box=(10, 10, 80, 72), out=out,
+            has_audio=False, crf=28, caption_png=cap,
+        )
+        frame = tmp_path / f"{name}.png"
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", str(out), "-vframes", "1", str(frame)],
+            check=True, capture_output=True,
+        )
+        pix = mpimg.imread(frame)
+        # lower-third band, away from the PIP corner
+        means.append(float(pix[300:350, 100:540, :3].mean()))
+    assert abs(means[0] - means[1]) > 0.02
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not on PATH")
+def test_sonify_mix_keeps_audio_for_the_whole_clip(tmp_path):
+    from videocortex_spark.overlay import compose_ffmpeg, _write_blank_png
+    from videocortex_spark.sonify import write_wav
+
+    src = _lavfi_clip(tmp_path / "src.mp4", 2.0, audio=True)
+    card = tmp_path / "card.png"
+    _write_blank_png(card, 32, 32)
+    concat = write_concat(tmp_path / "c.txt", [card], np.array([2.0]))
+    cortex = tmp_path / "cortex.wav"
+    t = np.arange(2 * 48000, dtype=np.float32) / 48000
+    bed = np.stack([0.2 * np.sin(2 * np.pi * 196 * t)] * 2, axis=1)
+    write_wav(cortex, bed)
+
+    out = tmp_path / "mixed.mp4"
+    compose_ffmpeg(
+        video=src, concat=concat, box=(10, 10, 80, 72), out=out,
+        has_audio=True, crf=28, cortex_wav=cortex,
+    )
+    info = probe_video(out)
+    assert info["has_audio"]
+    # the mix must last the whole clip, not stop at some first-stream boundary
+    assert info["duration"] == pytest.approx(2.0, abs=0.2)
+    # re-encoded aac, never stream-copied
+    fmt = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0",
+         "-show_entries", "stream=codec_name", "-of", "csv=p=0", str(out)],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    assert fmt == "aac"
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not on PATH")
+def test_sonify_only_replaces_the_original_audio(tmp_path):
+    from videocortex_spark.overlay import compose_ffmpeg, _write_blank_png
+    from videocortex_spark.sonify import write_wav
+
+    src = _lavfi_clip(tmp_path / "src.mp4", 2.0, audio=True)
+    card = tmp_path / "card.png"
+    _write_blank_png(card, 32, 32)
+    concat = write_concat(tmp_path / "c.txt", [card], np.array([2.0]))
+    cortex = tmp_path / "cortex.wav"
+    t = np.arange(2 * 48000, dtype=np.float32) / 48000
+    write_wav(cortex, np.stack([0.5 * np.sin(2 * np.pi * 880 * t)] * 2, axis=1))
+
+    out = tmp_path / "only.mp4"
+    compose_ffmpeg(
+        video=src, concat=concat, box=(10, 10, 80, 72), out=out,
+        has_audio=True, crf=28, cortex_wav=cortex, sonify_only=True,
+    )
+    # decode the output audio: the 880 Hz bed must dominate the 440 Hz original
+    raw = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(out), "-f", "f32le", "-ac", "1", "-"],
+        check=True, capture_output=True,
+    ).stdout
+    sig = np.frombuffer(raw, dtype=np.float32)
+    spectrum = np.abs(np.fft.rfft(sig * np.hanning(sig.size)))
+    freqs = np.fft.rfftfreq(sig.size, 1 / 48000)
+    def power_at(f):
+        return spectrum[np.abs(freqs - f) < 30].sum()
+    assert power_at(880) > 5 * power_at(440)
+
+
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not on PATH")
 def test_compose_ffmpeg_overlays_a_tiny_clip(tmp_path):
     from videocortex_spark.overlay import compose_ffmpeg, _write_blank_png

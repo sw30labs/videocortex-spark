@@ -343,6 +343,84 @@ def _concat_escape(p: Path) -> str:
     return f"'{s}'"
 
 
+def _video_chain(
+    box: tuple[int, int, int, int],
+    *,
+    cap_idx: int | None,
+) -> str:
+    """PIP composite, then the honesty lower-third when events are in play.
+
+    The caption arrives as a pre-rendered PNG (drawtext needs libfreetype,
+    which not every ffmpeg build ships; ``overlay`` is always there). Cards
+    stay events-free so the cache survives a changed caption.
+    """
+    x, y, pip_w, pip_h = box
+    parts = [
+        f"[1:v]format=rgba,scale={pip_w}:{pip_h}:flags=lanczos[pip]",
+        f"[0:v][pip]overlay={x}:{y}:format=auto:eof_action=repeat[v0]",
+    ]
+    cur = "v0"
+    if cap_idx is not None:
+        parts.append(f"[{cap_idx}:v]format=rgba[cap]")
+        parts.append(f"[{cur}][cap]overlay=(W-w)/2:H-h-0.03*H:format=auto[vc]")
+        cur = "vc"
+    # ffmpeg's rawvideo tag defaults leak through as smpte170m on the encode;
+    # untagged 8-bit 4:2:0 gets guessed as bt601 by players, which desaturates
+    # red and green — the two colours this overlay lives on. Pin the window.
+    parts.append(
+        f"[{cur}]setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709[outv]"
+    )
+    return ";".join(parts)
+
+
+def _audio_args(
+    has_audio: bool,
+    cortex_idx: int | None,
+    sonify_only: bool,
+) -> tuple[str, list[str]]:
+    """``(audio filter chain, map/codec args)``.
+
+    Default path is today's: copy the source audio untouched. Once cortex.wav
+    is in the graph the audio is decoded and re-encoded — never ``-c:a copy``:
+    the mix ducks the original ~-6 dB and lays the cortex bed at ~-18 dB
+    under a limiter, so speech stays intelligible over it.
+    """
+    if cortex_idx is None:
+        return "", (["-map", "0:a?", "-c:a", "copy"] if has_audio else [])
+    if has_audio and not sonify_only:
+        filt = (
+            f"[0:a]aformat=sample_rates=48000:channel_layouts=stereo,volume=0.501[aorg];"
+            f"[{cortex_idx}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+            "volume=0.126[acx];"
+            "[aorg][acx]amix=inputs=2:duration=first:dropout_transition=0,"
+            "alimiter=limit=0.95[outa]"
+        )
+        return filt, ["-map", "[outa]", "-c:a", "aac"]
+    return "", ["-map", f"{cortex_idx}:a", "-c:a", "aac"]
+
+
+def _compose_inputs(
+    video: Path,
+    cards_args: list[str],
+    caption_png: Path | None,
+    cortex_wav: Path | None,
+) -> tuple[list[str], int | None, int | None]:
+    """Flat argv inputs; returns (argv, caption index, cortex index)."""
+    groups: list[list[str]] = [["-i", str(video)], cards_args]
+    cap_idx = None
+    if caption_png is not None:
+        cap_idx = len(groups)
+        # A single frame, no -loop: overlay's eof_action=repeat holds it for
+        # the whole clip. -loop 1 would make the caption an infinite stream
+        # and the output timeline follows it — the video never ends.
+        groups.append(["-i", str(caption_png)])
+    cortex_idx = None
+    if cortex_wav is not None:
+        cortex_idx = len(groups)
+        groups.append(["-i", str(cortex_wav)])
+    return [a for g in groups for a in g], cap_idx, cortex_idx
+
+
 def _write_blank_png(path: Path, w: int = 16, h: int = 16) -> Path:
     import matplotlib
 
@@ -364,27 +442,30 @@ def compose_ffmpeg(
     has_audio: bool,
     fast: bool = False,
     crf: int = 16,
+    caption_png: Path | None = None,
+    cortex_wav: Path | None = None,
+    sonify_only: bool = False,
 ) -> Path:
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None:
         raise OverlayError("ffmpeg not on PATH: sudo apt install ffmpeg")
-    x, y, pip_w, pip_h = box
-    ov = (
-        f"[1:v]format=rgba,scale={pip_w}:{pip_h}:flags=lanczos[pip];"
-        f"[0:v][pip]overlay={x}:{y}:format=auto:eof_action=repeat,"
-        # ffmpeg's rawvideo tag defaults leak through as smpte170m on the
-        # encode; pin the window labels explicitly.
-        f"setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709[outv]"
+    inputs, cap_idx, cortex_idx = _compose_inputs(
+        video,
+        ["-f", "concat", "-safe", "0", "-fflags", "+genpts", "-i", str(concat)],
+        caption_png,
+        cortex_wav,
     )
+    ov = _video_chain(box, cap_idx=cap_idx)
+    audio_filt, audio_args = _audio_args(has_audio, cortex_idx, sonify_only)
+    if audio_filt:
+        ov += ";" + audio_filt
     cmd = [
         ffmpeg, "-y",
-        "-i", str(video),
-        "-f", "concat", "-safe", "0", "-fflags", "+genpts", "-i", str(concat),
+        *inputs,
         "-filter_complex", ov,
         "-map", "[outv]",
+        *audio_args,
     ]
-    if has_audio:
-        cmd += ["-map", "0:a?", "-c:a", "copy"]
     # NVENC (and some libx264 builds) skip automatic bt709 tagging; untagged
     # 8-bit 4:2:0 gets guessed as bt601 by players, which desaturates red
     # and green — the two colours this overlay lives on. The setparams
@@ -414,31 +495,38 @@ def compose_ffmpeg_pipe(
     fps: float,
     fast: bool = False,
     crf: int = 16,
+    caption_png: Path | None = None,
+    cortex_wav: Path | None = None,
+    sonify_only: bool = False,
 ) -> subprocess.Popen:
     """ffmpeg that reads RGBA frames on stdin. Caller writes then waits."""
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None:
         raise OverlayError("ffmpeg not on PATH: sudo apt install ffmpeg")
-    x, y, pip_w, pip_h = box
-    ov = (
-        f"[1:v]format=rgba,scale={pip_w}:{pip_h}:flags=lanczos[pip];"
-        f"[0:v][pip]overlay={x}:{y}:format=auto:eof_action=repeat,"
-        f"setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709[outv]"
+    inputs, cap_idx, cortex_idx = _compose_inputs(
+        video,
+        [
+            "-f", "rawvideo", "-pix_fmt", "rgba",
+            "-s", f"{int(width)}x{int(height)}",
+            "-framerate", f"{fps:g}",
+            "-thread_queue_size", "1024",
+            "-i", "pipe:0",
+        ],
+        caption_png,
+        cortex_wav,
     )
+    ov = _video_chain(box, cap_idx=cap_idx)
+    audio_filt, audio_args = _audio_args(has_audio, cortex_idx, sonify_only)
+    if audio_filt:
+        ov += ";" + audio_filt
     cmd = [
         ffmpeg, "-y",
-        "-i", str(video),
-        "-f", "rawvideo", "-pix_fmt", "rgba",
-        "-s", f"{int(width)}x{int(height)}",
-        "-framerate", f"{fps:g}",
-        "-thread_queue_size", "1024",
-        "-i", "pipe:0",
+        *inputs,
         "-filter_complex", ov,
         "-map", "[outv]",
+        *audio_args,
     ]
-    if has_audio:
-        cmd += ["-map", "0:a?", "-c:a", "copy"]
-    # See compose_ffmpeg: bt709 is pinned via the setparams filter or
+    # See _video_chain: bt709 is pinned via the setparams filter or
     # players guess bt601 and eat the overlay's reds and greens.
     cmd += video_encode_args(fast=fast, crf=crf)
     cmd += ["-movflags", "+faststart", "-shortest", str(out)]
@@ -485,10 +573,39 @@ def overlay_from_run(
     dest = Path(out) if out is not None else run_dir / "overlay.mp4"
     dest.parent.mkdir(parents=True, exist_ok=True)
 
+    # Events fail fast — before a single card is rendered. A missing events
+    # file is a typo, not a hint to skip the annotation.
+    events = None
+    caption = False
+    if cfg.events is not None:
+        from videocortex_spark import events as events_mod
+
+        try:
+            events = events_mod.load_events(cfg.events)
+        except events_mod.EventsError as exc:
+            raise OverlayError(str(exc)) from exc
+        caption = cfg.caption
+
+    cortex_wav = None
+    if cfg.sonify or cfg.sonify_only:
+        from videocortex_spark import sonify
+
+        try:
+            cortex_wav = sonify.sonify_from_run(
+                run_dir,
+                duration_s=probe["duration"],
+                lag_mode=cfg.lag_mode,
+                percentile=cfg.percentile,
+                threshold_frac=cfg.threshold_frac,
+            ).wav
+        except sonify.SonifyError as exc:
+            raise OverlayError(str(exc)) from exc
+
     if cfg.spin:
         result = _overlay_spin(
             run_dir, cfg, preds, timestamps, video_path, probe, lag,
-            dest, progress=progress,
+            dest, progress=progress, events=events, caption=caption,
+            cortex_wav=cortex_wav,
         )
         result = result._replace(seconds=time.time() - t0)
         logger.info(
@@ -523,6 +640,12 @@ def overlay_from_run(
     _write_blank_png(blank)
     write_concat(concat, cards, durs, lead_s=start, blank=blank)
 
+    caption_png = None
+    if caption:
+        from videocortex_spark.events import render_caption_png
+
+        caption_png = render_caption_png(pip_dir / "caption.png", probe["width"])
+
     compose_ffmpeg(
         video=video_path,
         concat=concat,
@@ -531,6 +654,9 @@ def overlay_from_run(
         has_audio=probe["has_audio"],
         fast=cfg.fast,
         crf=cfg.crf,
+        caption_png=caption_png,
+        cortex_wav=cortex_wav,
+        sonify_only=cfg.sonify_only,
     )
     elapsed = time.time() - t0
     logger.info("overlay -> %s  (%d cards, %.1fs)", dest, len(cards), elapsed)
@@ -550,6 +676,9 @@ def _overlay_spin(
     dest: Path,
     *,
     progress=None,
+    events=None,
+    caption: bool = False,
+    cortex_wav: Path | None = None,
 ) -> OverlayResult:
     from videocortex_spark import spin
     from videocortex_spark.render import blit_ribbon, compute_limits, format_pip_label
@@ -601,6 +730,10 @@ def _overlay_spin(
             energy_curve(preds[idx]), width_px=atlas.size, height_px=40,
             darkbg=cfg.darkbg,
         )
+        if events is not None:
+            from videocortex_spark.events import blit_event_ticks
+
+            ribbon = blit_event_ticks(ribbon, events, duration_s=probe["duration"])
     fps = max(8.0, float(cfg.fps))
     n_frames = max(1, int(math.ceil(probe["duration"] * fps - 1e-9)))
     blank = np.zeros((atlas.size, atlas.size, 4), dtype=np.uint8)
@@ -620,10 +753,17 @@ def _overlay_spin(
         box[2], box[3], box[0], box[1],
         palettes.shape[0], spin.clamp_dps(cfg.dps), fps, cfg.az_step,
     )
+    caption_png = None
+    if caption:
+        from videocortex_spark.events import render_caption_png
+
+        caption_png = render_caption_png(pip_dir / "caption.png", probe["width"])
     proc = compose_ffmpeg_pipe(
         video=video_path, box=box, out=dest, has_audio=probe["has_audio"],
         width=atlas.size, height=atlas.size, fps=fps,
         fast=cfg.fast, crf=cfg.crf,
+        caption_png=caption_png, cortex_wav=cortex_wav,
+        sonify_only=cfg.sonify_only,
     )
     assert proc.stdin is not None
     try:
