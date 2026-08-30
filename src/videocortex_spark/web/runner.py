@@ -1,0 +1,814 @@
+"""Background jobs for the command deck.
+
+One job at a time. A render is minutes of GB10; overlay is shorter but
+still not something to pile up. The HTTP layer polls; a worker thread
+drives ``pipeline.run`` / ``overlay_from_run``. Progress lives in an
+in-memory ring — no WebSocket, no extra dependency.
+
+``set_job_handler`` is a test hook so the suite never loads TRIBE.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import logging
+import os
+import shutil
+import threading
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable
+
+from videocortex_spark.config import OverlayConfig, RenderConfig, RunConfig, VIEW_PRESETS
+from videocortex_spark.spark import TORCH_CU130_INDEX, VALID_DEVICES
+
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "busy",
+    "active_job_id",
+    "get_job",
+    "list_jobs",
+    "list_runs",
+    "get_run",
+    "delete_run",
+    "runs_dir",
+    "set_runs_dir",
+    "set_job_handler",
+    "reset_for_tests",
+    "start_render_job",
+    "start_overlay_job",
+    "health",
+    "defaults",
+    "doctor_report",
+    "resolve_run",
+    "resolve_media",
+    "MEDIA_TYPES",
+]
+
+_MAX_JOBS = 25
+_MAX_EVENTS = 200
+_MAX_LISTED_FRAMES = 24
+
+MEDIA_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".svg": "image/svg+xml",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
+    ".json": "application/json; charset=utf-8",
+}
+
+_JOBS: dict[str, dict[str, Any]] = {}
+_JOBS_LOCK = threading.Lock()
+_BUSY = threading.Lock()
+_ACTIVE: dict[str, Any] = {"id": None}
+_ACTIVE_LOCK = threading.Lock()
+
+_RUNS_DIR: Path | None = None
+_JOB_HANDLER: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def set_runs_dir(path: Path | None) -> None:
+    global _RUNS_DIR
+    _RUNS_DIR = Path(path).resolve() if path is not None else None
+
+
+def runs_dir() -> Path:
+    return _RUNS_DIR if _RUNS_DIR is not None else Path("runs").resolve()
+
+
+def set_job_handler(
+    fn: Callable[[str, dict[str, Any]], dict[str, Any]] | None,
+) -> None:
+    global _JOB_HANDLER
+    _JOB_HANDLER = fn
+
+
+def busy() -> bool:
+    return _BUSY.locked()
+
+
+def active_job_id() -> str | None:
+    with _ACTIVE_LOCK:
+        return _ACTIVE.get("id")
+
+
+def reset_for_tests(timeout: float = 8.0) -> None:
+    """Drop in-memory state. Waits for a running job so tests don't collide."""
+    deadline = time.time() + timeout
+    while busy() and time.time() < deadline:
+        time.sleep(0.02)
+    with _JOBS_LOCK:
+        _JOBS.clear()
+    with _ACTIVE_LOCK:
+        _ACTIVE["id"] = None
+    set_job_handler(None)
+    set_runs_dir(None)
+
+
+def get_job(job_id: str) -> dict[str, Any] | None:
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        return _copy_job(job) if job else None
+
+
+def list_jobs(limit: int = 25) -> list[dict[str, Any]]:
+    with _JOBS_LOCK:
+        jobs = sorted(
+            _JOBS.values(),
+            key=lambda j: j.get("started_at") or "",
+            reverse=True,
+        )
+        return [_copy_job(j) for j in jobs[:limit]]
+
+
+def _copy_job(job: dict[str, Any]) -> dict[str, Any]:
+    out = dict(job)
+    out["events"] = list(job.get("events") or [])
+    out["progress"] = dict(job.get("progress") or {})
+    out["params"] = dict(job.get("params") or {})
+    if job.get("result") is not None:
+        out["result"] = dict(job["result"])
+    return out
+
+
+def health() -> dict[str, Any]:
+    from videocortex_spark import __version__
+    from videocortex_spark.device import probe
+
+    info = probe()
+    picked = None
+    if info.get("torch"):
+        picked = "cuda" if info.get("has_cuda") else "cpu"
+    has_tribe = importlib.util.find_spec("tribev2") is not None
+    return {
+        "ok": True,
+        "version": __version__,
+        "busy": busy(),
+        "active_job_id": active_job_id(),
+        "runs_dir": str(runs_dir()),
+        "torch": info.get("torch"),
+        "tribev2": has_tribe,
+        "can_encode": bool(info.get("torch")) and has_tribe,
+        "has_cuda": bool(info.get("has_cuda")),
+        "device": picked,
+        "machine": info.get("machine"),
+        "device_name": info.get("device_name"),
+        "is_gb10": bool(info.get("is_gb10")),
+        "capability": info.get("capability"),
+        "note": info.get("note") or _model_stack_error(),
+    }
+
+
+def defaults() -> dict[str, Any]:
+    overlay = OverlayConfig()
+    render = RenderConfig()
+    return {
+        "runs_dir": str(runs_dir()),
+        "device": "auto",
+        "devices": list(VALID_DEVICES),
+        "views": sorted(VIEW_PRESETS),
+        "positions": ["top-right", "top-left"],
+        "lag_modes": ["stimulus", "scanner"],
+        "render": {
+            "views": render.views,
+            "max_frames": render.max_frames,
+            "stride": render.stride,
+            "cmap": render.cmap,
+            "percentile": render.percentile,
+            "threshold_frac": render.threshold_frac,
+            "dpi": render.dpi,
+        },
+        "overlay": {
+            "views": overlay.views,
+            "size": overlay.size,
+            "position": overlay.position,
+            "lag_mode": overlay.lag_mode,
+            "label": overlay.label,
+            "spin": overlay.spin,
+            "dps": overlay.dps,
+            "fps": overlay.fps,
+            "az_step": overlay.az_step,
+            "monitor": overlay.monitor,
+            "stride": overlay.stride,
+        },
+    }
+
+
+def doctor_report(*, model: bool = False, network: bool = True) -> dict[str, Any]:
+    from videocortex_spark import doctor
+
+    checks = doctor.run_all(network=network, model=model)
+    return {
+        "scope": "model" if model else "renderer",
+        "ok": doctor.exit_code(checks) == 0,
+        "exit_code": doctor.exit_code(checks),
+        "checks": [
+            {
+                "name": c.name,
+                "status": c.status,
+                "detail": c.detail,
+                "fix": c.fix,
+                "glyph": c.glyph,
+            }
+            for c in checks
+        ],
+    }
+
+
+# -- runs on disk ----------------------------------------------------------
+
+
+def resolve_run(run_id: str) -> Path | None:
+    """Map a run id to its folder. Single path component, inside runs_dir."""
+    if not run_id or run_id in (".", "..") or "/" in run_id or "\\" in run_id:
+        return None
+    root = runs_dir()
+    folder = (root / run_id).resolve()
+    try:
+        folder.relative_to(root)
+    except ValueError:
+        return None
+    if folder.parent != root or not folder.is_dir():
+        return None
+    return folder
+
+
+def resolve_media(run_id: str, rel: str) -> Path | None:
+    """A file inside a run dir, suffix-allowlisted, no ``..`` walk."""
+    folder = resolve_run(run_id)
+    if folder is None or not rel:
+        return None
+    parts = Path(rel).parts
+    if not parts or any(p in (".", "..") or p.startswith("/") for p in parts):
+        return None
+    target = (folder.joinpath(*parts)).resolve()
+    try:
+        target.relative_to(folder)
+    except ValueError:
+        return None
+    if not target.is_file():
+        return None
+    if target.suffix.lower() not in MEDIA_TYPES:
+        return None
+    return target
+
+
+def list_runs() -> list[dict[str, Any]]:
+    root = runs_dir()
+    if not root.is_dir():
+        return []
+    out: list[dict[str, Any]] = []
+    for child in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+        if not child.is_dir() or child.name.startswith("."):
+            continue
+        summary = _run_summary(child)
+        if summary is None:
+            continue
+        out.append(summary)
+    out.sort(key=lambda r: r.get("mtime") or "", reverse=True)
+    return out
+
+
+def get_run(run_id: str) -> dict[str, Any] | None:
+    folder = resolve_run(run_id)
+    if folder is None:
+        return None
+    summary = _run_summary(folder)
+    if summary is None:
+        return None
+    summary["manifest"] = _read_manifest(folder)
+    summary["media"] = _media_urls(folder, run_id)
+    return summary
+
+
+def delete_run(run_id: str) -> tuple[dict[str, Any] | None, str | None]:
+    """Remove a run folder. Refuses a run the active job is writing into."""
+    folder = resolve_run(run_id)
+    if folder is None or not _is_run_dir(folder):
+        return None, "unknown run"
+    why = _run_in_use(run_id, folder)
+    if why:
+        return None, why
+    try:
+        shutil.rmtree(folder)
+    except OSError as exc:
+        return None, f"could not delete {run_id}: {exc}"
+    logger.info("deleted run %s (%s)", run_id, folder)
+    return {"id": run_id, "deleted": True}, None
+
+
+def _run_in_use(run_id: str, folder: Path) -> str | None:
+    if not busy():
+        return None
+    job = get_job(active_job_id() or "")
+    if job is None:
+        return None
+    params = job.get("params") or {}
+    if str(params.get("run") or "") == run_id:
+        return "run is in use by the active job"
+    for key in ("run_path", "out"):
+        raw = params.get(key)
+        if not raw:
+            continue
+        try:
+            path = Path(str(raw)).expanduser().resolve()
+        except OSError:
+            continue
+        if path == folder or folder in path.parents:
+            return "run is in use by the active job"
+    return None
+
+
+def _is_run_dir(folder: Path) -> bool:
+    return any(
+        (folder / name).exists()
+        for name in (
+            "predictions.npy",
+            "contact_sheet.png",
+            "overlay.mp4",
+            "overlay_spin.mp4",
+            "manifest.json",
+        )
+    )
+
+
+def _run_summary(folder: Path) -> dict[str, Any] | None:
+    if not _is_run_dir(folder):
+        return None
+    man = _read_manifest(folder)
+    result = (man or {}).get("result") or {}
+    run = (man or {}).get("run") or {}
+    kind, stim = _stimulus_from_run(run)
+    n_frames = result.get("n_frames")
+    frames_dir = folder / "frames"
+    if n_frames is None and frames_dir.is_dir():
+        n_frames = sum(1 for p in frames_dir.iterdir() if p.suffix.lower() == ".png")
+    mtime = _mtime_iso(folder)
+    return {
+        "id": folder.name,
+        "path": str(folder),
+        "n_timesteps": result.get("n_timesteps"),
+        "n_vertices": result.get("n_vertices"),
+        "n_frames": n_frames,
+        "seconds": result.get("seconds"),
+        "tr_s": result.get("tr_s"),
+        "stimulus": kind,
+        "stimulus_path": stim,
+        "has_predictions": (folder / "predictions.npy").is_file(),
+        "has_contact_sheet": (folder / "contact_sheet.png").is_file(),
+        "has_overlay": (folder / "overlay.mp4").is_file(),
+        "has_overlay_spin": (folder / "overlay_spin.mp4").is_file(),
+        "mtime": mtime,
+    }
+
+
+def _media_urls(folder: Path, run_id: str) -> dict[str, Any]:
+    def url(rel: str) -> str | None:
+        return f"/media/runs/{run_id}/{rel}" if (folder / rel).is_file() else None
+
+    frames: list[str] = []
+    frames_dir = folder / "frames"
+    if frames_dir.is_dir():
+        names = sorted(
+            p.name for p in frames_dir.iterdir()
+            if p.is_file() and p.suffix.lower() == ".png"
+        )
+        frames = [f"/media/runs/{run_id}/frames/{n}" for n in names[:_MAX_LISTED_FRAMES]]
+    return {
+        "contact_sheet": url("contact_sheet.png"),
+        "overlay": url("overlay.mp4"),
+        "overlay_spin": url("overlay_spin.mp4"),
+        "manifest": url("manifest.json"),
+        "frames": frames,
+    }
+
+
+def _read_manifest(folder: Path) -> dict[str, Any] | None:
+    path = folder / "manifest.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _stimulus_from_run(run: dict[str, Any]) -> tuple[str | None, str | None]:
+    for kind in ("video", "audio", "text"):
+        val = run.get(kind)
+        if val:
+            return kind, str(val)
+    return None, None
+
+
+def _mtime_iso(path: Path) -> str | None:
+    try:
+        ts = path.stat().st_mtime
+    except OSError:
+        return None
+    return datetime.fromtimestamp(ts, tz=timezone.utc).replace(microsecond=0).isoformat()
+
+
+# -- jobs ------------------------------------------------------------------
+
+
+def _model_stack_error() -> str | None:
+    """Why encode cannot start. None if we should try.
+
+    Tests inject a handler so they never load TRIBE. A real encode without
+    torch dies in the worker with a traceback — refuse it at POST instead.
+    """
+    if importlib.util.find_spec("torch") is None:
+        return (
+            "torch is not installed. On DGX Spark:\n"
+            f"    uv pip install torch torchvision torchaudio --index-url {TORCH_CU130_INDEX}\n"
+            "    uv pip install -e '.[predict]'"
+        )
+    if importlib.util.find_spec("tribev2") is None:
+        return (
+            "tribev2 is not installed. On DGX Spark:\n"
+            "    uv pip install -e '.[predict]'"
+        )
+    return None
+
+
+def start_render_job(body: dict[str, Any]) -> tuple[str | None, str | None]:
+    params, err = _parse_render(body)
+    if err:
+        return None, err
+    if _JOB_HANDLER is None:
+        err = _model_stack_error()
+        if err:
+            return None, err
+    return _start("render", params)
+
+
+def start_overlay_job(body: dict[str, Any]) -> tuple[str | None, str | None]:
+    params, err = _parse_overlay(body)
+    if err:
+        return None, err
+    return _start("overlay", params)
+
+
+def _start(kind: str, params: dict[str, Any]) -> tuple[str | None, str | None]:
+    if not _BUSY.acquire(blocking=False):
+        return None, "a job is already running"
+    job_id = uuid.uuid4().hex[:12]
+    job = {
+        "id": job_id,
+        "kind": kind,
+        "status": "running",
+        "started_at": _now(),
+        "finished_at": None,
+        "params": params,
+        "result": None,
+        "error": None,
+        "events": [],
+        "progress": {},
+    }
+    with _JOBS_LOCK:
+        _JOBS[job_id] = job
+        _trim_jobs()
+    with _ACTIVE_LOCK:
+        _ACTIVE["id"] = job_id
+    _emit(job_id, f"started {kind}")
+    thread = threading.Thread(
+        target=_worker, args=(job_id, kind, params), name=f"videocortex-{kind}", daemon=True,
+    )
+    thread.start()
+    return job_id, None
+
+
+def _trim_jobs() -> None:
+    if len(_JOBS) <= _MAX_JOBS:
+        return
+    ordered = sorted(_JOBS.values(), key=lambda j: j.get("started_at") or "")
+    for stale in ordered[: len(_JOBS) - _MAX_JOBS]:
+        if stale.get("status") == "running":
+            continue
+        _JOBS.pop(stale["id"], None)
+
+
+def _worker(job_id: str, kind: str, params: dict[str, Any]) -> None:
+    os.environ.setdefault("MPLBACKEND", "Agg")
+    try:
+        if _JOB_HANDLER is not None:
+            result = dict(_JOB_HANDLER(kind, params) or {})
+        elif kind == "render":
+            result = _run_render(job_id, params)
+        elif kind == "overlay":
+            result = _run_overlay(job_id, params)
+        else:
+            raise ValueError(f"unknown job kind {kind!r}")
+        _finish(job_id, ok=True, result=result)
+    except Exception as exc:
+        logger.exception("%s job %s failed", kind, job_id)
+        _finish(job_id, ok=False, error=f"{type(exc).__name__}: {exc}")
+    finally:
+        with _ACTIVE_LOCK:
+            if _ACTIVE.get("id") == job_id:
+                _ACTIVE["id"] = None
+        if _BUSY.locked():
+            _BUSY.release()
+
+
+def _finish(job_id: str, *, ok: bool, result: dict[str, Any] | None = None, error: str | None = None) -> None:
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if job is None:
+            return
+        job["status"] = "ok" if ok else "error"
+        job["finished_at"] = _now()
+        job["result"] = result
+        job["error"] = error
+    _emit(job_id, "done" if ok else f"failed: {error}")
+
+
+def _emit(job_id: str, msg: str) -> None:
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if job is None:
+            return
+        events = job.setdefault("events", [])
+        events.append({"at": _now(), "msg": msg})
+        if len(events) > _MAX_EVENTS:
+            del events[: len(events) - _MAX_EVENTS]
+
+
+def _set_progress(job_id: str, i: int, n: int, label: str) -> None:
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
+        if job is None:
+            return
+        job["progress"] = {"i": int(i), "n": int(n), "label": label}
+
+
+def _progress_cb(job_id: str, label: str) -> Callable[[int, int], None]:
+    last = [0.0]
+
+    def _cb(i: int, n: int) -> None:
+        now = time.monotonic()
+        _set_progress(job_id, i, n, label)
+        if i in (0, n) or now - last[0] >= 0.4:
+            last[0] = now
+            _emit(job_id, f"{label} {i}/{n}")
+
+    return _cb
+
+
+# -- parse / execute -------------------------------------------------------
+
+
+def _parse_render(body: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+    given = {k: body.get(k) for k in ("video", "audio", "text") if body.get(k)}
+    if len(given) != 1:
+        return None, "exactly one of video / audio / text is required"
+    kind, raw = next(iter(given.items()))
+    path = _existing_file(raw)
+    if path is None:
+        return None, f"{kind} is not a file: {raw}"
+    device = str(body.get("device") or "auto")
+    if device not in VALID_DEVICES:
+        return None, f"unknown device {device!r}"
+    views = str(body.get("views") or "standard")
+    if views not in VIEW_PRESETS:
+        return None, f"unknown views {views!r}"
+    try:
+        max_frames = int(body.get("max_frames", 60))
+        stride = int(body.get("stride", 1))
+        percentile = float(body.get("percentile", 99.0))
+        threshold_frac = float(body.get("threshold_frac", 0.25))
+        dpi = int(body.get("dpi", 150))
+    except (TypeError, ValueError):
+        return None, "numeric render fields must be numbers"
+    if max_frames < 0 or stride < 1:
+        return None, "max_frames must be >= 0 and stride must be >= 1"
+    out = body.get("out") or str(runs_dir())
+    return {
+        "kind": kind,
+        kind: str(path),
+        "out": str(Path(out).expanduser()),
+        "device": device,
+        "views": views,
+        "max_frames": max_frames,
+        "stride": stride,
+        "cmap": str(body.get("cmap") or "cold_hot"),
+        "percentile": percentile,
+        "threshold_frac": threshold_frac,
+        "dpi": dpi,
+        "light": _as_bool(body.get("light"), False),
+        "contact_sheet": not _as_bool(body.get("no_contact_sheet"), False),
+        "filmstrip": not _as_bool(body.get("no_filmstrip"), False),
+        "regions": not _as_bool(body.get("no_regions"), False),
+    }, None
+
+
+def _parse_overlay(body: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+    run_id = str(body.get("run") or "").strip()
+    folder = resolve_run(run_id)
+    if folder is None:
+        return None, f"unknown run {run_id!r}"
+    if not (folder / "predictions.npy").is_file():
+        return None, f"run {run_id!r} has no predictions.npy — overlay needs a finished encode"
+    video = body.get("video")
+    video_path = None
+    if video:
+        video_path = _existing_file(video)
+        if video_path is None:
+            return None, f"video is not a file: {video}"
+    views = str(body.get("views") or "standard")
+    if views not in VIEW_PRESETS:
+        return None, f"unknown views {views!r}"
+    position = str(body.get("position") or "top-right")
+    if position not in ("top-right", "top-left"):
+        return None, f"unknown position {position!r}"
+    lag_mode = str(body.get("lag_mode") or "stimulus")
+    if lag_mode not in ("stimulus", "scanner"):
+        return None, f"unknown lag_mode {lag_mode!r}"
+    label = str(body.get("label") or "time")
+    if label not in ("time", "tr", "none"):
+        return None, f"unknown label {label!r}"
+    try:
+        size = float(body.get("size", 0.24))
+        stride = int(body.get("stride", 1))
+        dps = float(body.get("dps", 24.0))
+        fps = float(body.get("fps", 24.0))
+        az_step = int(body.get("az_step", 2))
+        percentile = body.get("percentile")
+        threshold_frac = body.get("threshold_frac")
+        percentile = float(percentile) if percentile is not None else None
+        threshold_frac = float(threshold_frac) if threshold_frac is not None else None
+        ramp = body.get("ramp_frac")
+        ramp_frac_ramp = float(ramp) if ramp is not None else None
+    except (TypeError, ValueError):
+        return None, "numeric overlay fields must be numbers"
+    if stride < 1:
+        return None, "stride must be >= 1"
+    dps = min(48.0, max(12.0, dps))
+    fps = max(8.0, fps)
+    az_step = max(1, az_step)
+    spin = _as_bool(body.get("spin"), False)
+    out = body.get("out")
+    if not out:
+        out = str(folder / ("overlay_spin.mp4" if spin else "overlay.mp4"))
+    return {
+        "run": run_id,
+        "run_path": str(folder),
+        "video": str(video_path) if video_path else None,
+        "out": str(Path(out).expanduser()),
+        "views": views,
+        "cmap": body.get("cmap"),
+        "percentile": percentile,
+        "threshold_frac": threshold_frac,
+        "size": size,
+        "position": position,
+        "label": label,
+        "lag_mode": lag_mode,
+        "stride": stride,
+        "fast": _as_bool(body.get("fast"), False),
+        "force": _as_bool(body.get("force"), False),
+        "light": _as_bool(body.get("light"), False),
+        "spin": spin,
+        "dps": dps,
+        "fps": fps,
+        "az_step": az_step,
+        "monitor": _as_bool(body.get("monitor"), True),
+        "ribbon": _as_bool(body.get("ribbon"), True),
+        "regions": _as_bool(body.get("regions"), True),
+        "ramp_frac": ramp_frac_ramp if ramp_frac_ramp is not None else 0.5,
+    }, None
+
+
+def _run_render(job_id: str, params: dict[str, Any]) -> dict[str, Any]:
+    from videocortex_spark import pipeline
+
+    kind = params["kind"]
+    run_cfg = RunConfig(
+        video=Path(params["video"]) if kind == "video" else None,
+        audio=Path(params["audio"]) if kind == "audio" else None,
+        text=Path(params["text"]) if kind == "text" else None,
+        out_dir=Path(params["out"]),
+        device=params["device"],
+    )
+    render_cfg = RenderConfig(
+        views=params["views"],
+        cmap=params["cmap"],
+        percentile=params["percentile"],
+        threshold_frac=params["threshold_frac"],
+        stride=params["stride"],
+        max_frames=params["max_frames"],
+        dpi=params["dpi"],
+        contact_sheet=params["contact_sheet"],
+        darkbg=not params["light"],
+        filmstrip=params.get("filmstrip", True),
+        regions=params.get("regions", True),
+    )
+    orig = pipeline._progress
+    pipeline._progress = _progress_cb(job_id, "rendering")
+    try:
+        _emit(job_id, f"encoding {Path(params[kind]).name} on {params['device']}")
+        result = pipeline.run(run_cfg, render_cfg)
+    finally:
+        pipeline._progress = orig
+    return {
+        "out_dir": str(result.out_dir),
+        "n_timesteps": result.n_timesteps,
+        "n_frames": len(result.frames),
+        "seconds": round(result.seconds, 1),
+        "contact_sheet": str(result.contact_sheet) if result.contact_sheet else None,
+        "predictions": str(result.predictions) if result.predictions else None,
+        "run_id": result.out_dir.name,
+    }
+
+
+def _run_overlay(job_id: str, params: dict[str, Any]) -> dict[str, Any]:
+    from videocortex_spark.overlay import overlay_from_run
+
+    run_dir = Path(params["run_path"])
+    cmap = params.get("cmap")
+    percentile = params.get("percentile")
+    threshold_frac = params.get("threshold_frac")
+    man = run_dir / "manifest.json"
+    if man.is_file() and (cmap is None or percentile is None or threshold_frac is None):
+        render = json.loads(man.read_text(encoding="utf-8")).get("render") or {}
+        cmap = cmap or render.get("cmap") or "cold_hot"
+        if percentile is None:
+            percentile = float(render.get("percentile") or 99.0)
+        if threshold_frac is None:
+            threshold_frac = float(render.get("threshold_frac") or 0.25)
+    cfg = OverlayConfig(
+        views=params["views"],
+        cmap=cmap or "cold_hot",
+        percentile=99.0 if percentile is None else percentile,
+        threshold_frac=0.25 if threshold_frac is None else threshold_frac,
+        darkbg=not params["light"],
+        size=params["size"],
+        position=params["position"],
+        label=params["label"],
+        lag_mode=params["lag_mode"],
+        stride=params["stride"],
+        fast=params["fast"],
+        force=params["force"],
+        spin=params["spin"],
+        dps=params["dps"],
+        fps=params["fps"],
+        az_step=params["az_step"],
+        monitor=params["monitor"],
+        ribbon=params.get("ribbon", True),
+        regions=params.get("regions", True),
+        ramp_frac=params.get("ramp_frac", 0.5),
+    )
+    label = "spin" if cfg.spin else "PIP cards"
+    _emit(job_id, f"{label} for {params['run']}")
+    result = overlay_from_run(
+        run_dir,
+        cfg,
+        video=Path(params["video"]) if params.get("video") else None,
+        out=Path(params["out"]),
+        progress=_progress_cb(job_id, label),
+    )
+    return {
+        "out": str(result.out),
+        "pip_dir": str(result.pip_dir),
+        "n_cards": result.n_cards,
+        "seconds": round(result.seconds, 1),
+        "run_id": params["run"],
+        "spin": cfg.spin,
+    }
+
+
+def _existing_file(raw: Any) -> Path | None:
+    if not raw or not isinstance(raw, str):
+        return None
+    path = Path(raw).expanduser()
+    try:
+        path = path.resolve()
+    except OSError:
+        return None
+    return path if path.is_file() else None
+
+
+def _as_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return default

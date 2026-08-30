@@ -1,0 +1,11 @@
+.venv
+.git
+.pytest_cache
+**/__pycache__
+*.egg-info
+runs
+.videocortex-spark-cache
+input
+tests
+*.md
+!README.md

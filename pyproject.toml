@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "videocortex-spark"
+version = "0.1.0"
+description = "Video in, cortical activation maps out. TRIBE v2 on NVIDIA DGX Spark (GB10)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Nicolas Cravino" }]
+keywords = ["fmri", "brain-encoding", "neuroscience", "tribe", "fsaverage5", "dgx-spark", "gb10"]
+
+# Deliberately light. The renderer only needs the neuroimaging stack, so
+# `videocortex-spark draw` works on a machine that has never seen torch.
+dependencies = [
+  "numpy>=2.1",
+  "nilearn>=0.11",
+  "nibabel>=5.1",
+  "matplotlib>=3.8",
+  "scipy>=1.11",
+  "pillow>=10",
+  "huggingface_hub>=0.30",
+]
+
+[project.optional-dependencies]
+# The half that actually runs the model. Torch is *not* listed here on
+# purpose: a bare `pip install torch` on aarch64 pulls a CPU wheel or a
+# CUDA-12 wheel that cannot see GB10. setup_and_run.sh / the README
+# install cu130 wheels first, then this extra, then force-reinstall the
+# cu130 wheel — tribev2's own deps resolve torch from PyPI and would
+# otherwise silently steal the GPU.
+predict = [
+  "tribev2 @ git+https://github.com/facebookresearch/tribev2.git",
+]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov",
+]
+
+[project.scripts]
+videocortex-spark = "videocortex_spark.cli:main"
+
+[project.urls]
+Upstream = "https://github.com/facebookresearch/tribev2"
+Weights = "https://huggingface.co/facebook/tribev2"
+Paper = "https://arxiv.org/abs/2605.04326"
+PortingGuide = "https://docs.nvidia.com/dgx/dgx-spark-porting-guide/"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+videocortex_spark = ["web/static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+  "slow: needs network or the full model stack",
+]

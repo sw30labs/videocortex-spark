@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VIDEOCORTEX SPARK // Command Deck</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<style>
+:root {
+  --bg: #04060c;
+  --panel: rgba(13, 20, 34, 0.72);
+  --panel-solid: #0d1422;
+  --line: rgba(94, 234, 212, 0.10);
+  --line-strong: rgba(94, 234, 212, 0.22);
+  --txt: #d7e3f4;
+  --dim: #8493aa;
+  --faint: #77869e;
+  --cyan: #22d3ee;
+  --teal: #5eead4;
+  --amber: #fbbf24;
+  --red: #f87171;
+  --green: #34d399;
+  --phosphor: #18f22a;
+  --mono: "SF Mono", ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  --sans: -apple-system, "Segoe UI", Inter, Roboto, "Helvetica Neue", sans-serif;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--txt); font-family: var(--sans);
+  font-size: 14px; overflow-x: hidden; min-height: 100vh;
+}
+::selection { background: rgba(34, 211, 238, 0.3); }
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #1c2a42; border-radius: 5px; border: 2px solid var(--bg); }
+
+#spotlight {
+  position: fixed; inset: 0; z-index: 1; pointer-events: none;
+  background: radial-gradient(600px circle at var(--mx, 50%) var(--my, 30%), rgba(34, 211, 238, 0.055), transparent 65%);
+}
+#grain {
+  position: fixed; inset: 0; z-index: 2; pointer-events: none; opacity: 0.5;
+  background:
+    repeating-linear-gradient(0deg, rgba(255,255,255,0.012) 0 1px, transparent 1px 3px),
+    radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.5) 100%);
+}
+
+#boot {
+  position: fixed; inset: 0; z-index: 100; background: var(--bg);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 22px; transition: opacity 0.7s ease, visibility 0.7s;
+}
+#boot.done { opacity: 0; visibility: hidden; }
+.boot-logo {
+  font-family: var(--mono); font-size: 13px; letter-spacing: 0.55em; color: var(--cyan);
+  text-transform: uppercase; text-shadow: 0 0 24px rgba(34,211,238,0.6);
+  animation: bootPulse 1.6s ease-in-out infinite;
+}
+@keyframes bootPulse { 50% { opacity: 0.55; } }
+.boot-bar { width: 260px; height: 2px; background: #12203a; overflow: hidden; border-radius: 2px; }
+.boot-bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--teal), var(--cyan)); box-shadow: 0 0 12px var(--cyan); transition: width 0.25s ease; }
+.boot-log { font-family: var(--mono); font-size: 10.5px; color: var(--dim); height: 15px; letter-spacing: 0.08em; }
+
+header.top {
+  position: sticky; top: 0; z-index: 50;
+  display: flex; align-items: center; gap: 16px;
+  padding: 0 26px; height: 62px;
+  background: rgba(4, 6, 12, 0.82); backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--line);
+}
+.logo-mark { width: 34px; height: 34px; flex: none; filter: drop-shadow(0 0 8px rgba(34,211,238,0.45)); }
+.brand { line-height: 1.15; }
+.brand b { font-family: var(--mono); font-size: 15px; letter-spacing: 0.28em; color: #fff; font-weight: 700; }
+.brand span { display: block; font-size: 9.5px; letter-spacing: 0.22em; color: var(--dim); text-transform: uppercase; }
+.top-spacer { flex: 1; }
+.badge {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em;
+  padding: 5px 11px; border: 1px solid var(--line-strong); border-radius: 3px;
+  color: var(--teal); background: rgba(94, 234, 212, 0.05); white-space: nowrap;
+}
+.badge.warn { color: var(--amber); border-color: rgba(251,191,36,0.3); background: rgba(251,191,36,0.06); }
+.badge.bad { color: var(--red); border-color: rgba(248,113,113,0.3); background: rgba(248,113,113,0.06); }
+.badge.ok { color: var(--green); border-color: rgba(52,211,153,0.3); background: rgba(52,211,153,0.06); }
+.clock { font-family: var(--mono); font-size: 12px; color: var(--dim); letter-spacing: 0.12em; display: flex; align-items: center; gap: 8px; }
+.live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 9px var(--green); animation: bootPulse 2s infinite; }
+.live-dot.off { background: var(--dim); box-shadow: none; animation: none; }
+
+.layout { position: relative; z-index: 10; display: flex; min-height: calc(100vh - 62px); }
+nav.side {
+  width: 208px; flex: none; padding: 26px 14px;
+  border-right: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 4px;
+  position: sticky; top: 62px; height: calc(100vh - 62px);
+}
+.nav-label { font-family: var(--mono); font-size: 9px; letter-spacing: 0.3em; color: var(--faint); text-transform: uppercase; padding: 0 12px 10px; }
+.nav-btn {
+  display: flex; align-items: center; gap: 11px;
+  padding: 10px 12px; border: 1px solid transparent; border-radius: 6px;
+  background: none; color: var(--dim); font-family: var(--sans); font-size: 13px;
+  cursor: pointer; text-align: left; transition: all 0.18s ease;
+}
+.nav-btn svg { width: 16px; height: 16px; flex: none; opacity: 0.8; }
+.nav-btn:hover { color: var(--txt); background: rgba(94, 234, 212, 0.04); }
+.nav-btn.active {
+  color: var(--teal); background: rgba(94, 234, 212, 0.07);
+  border-color: var(--line-strong); box-shadow: inset 2px 0 0 var(--cyan), 0 0 22px rgba(34,211,238,0.07);
+}
+.nav-btn .count { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--faint); }
+.side-foot { margin-top: auto; font-family: var(--mono); font-size: 9px; color: var(--faint); letter-spacing: 0.14em; padding: 12px; line-height: 1.9; }
+
+main { flex: 1; padding: 28px 30px 60px; max-width: 1460px; }
+.view { display: none; }
+.view.active { display: block; animation: viewIn 0.45s cubic-bezier(0.22, 1, 0.36, 1); }
+@keyframes viewIn { from { opacity: 0; transform: translateY(14px); } }
+.view-head { margin-bottom: 22px; }
+.view-head h1 { font-family: var(--mono); font-size: 21px; letter-spacing: 0.12em; color: #fff; font-weight: 600; }
+.view-head h1 em { font-style: normal; color: var(--cyan); }
+.view-head p { color: var(--dim); font-size: 12.5px; margin-top: 5px; letter-spacing: 0.04em; }
+
+.panel {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  backdrop-filter: blur(8px); padding: 18px 20px; position: relative; overflow: hidden;
+}
+.panel::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(94,234,212,0.35), transparent);
+}
+.panel-title {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.26em; text-transform: uppercase;
+  color: var(--dim); margin-bottom: 14px; display: flex; align-items: center; gap: 8px;
+}
+.panel-title::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.grid { display: grid; gap: 16px; }
+.g-4 { grid-template-columns: repeat(4, 1fr); }
+.g-2 { grid-template-columns: repeat(2, 1fr); }
+.mt { margin-top: 16px; }
+@media (max-width: 1100px) {
+  .g-4, .g-2 { grid-template-columns: 1fr; }
+}
+@media (max-width: 760px) {
+  header.top { padding: 0 12px; gap: 10px; }
+  .brand b { font-size: 11px; letter-spacing: 0.14em; }
+  .brand span, header.top .badge { display: none; }
+  .layout { display: block; }
+  nav.side {
+    position: sticky; top: 62px; z-index: 45;
+    width: 100%; height: auto; padding: 7px 10px;
+    flex-direction: row; overflow-x: auto;
+    border-right: 0; border-bottom: 1px solid var(--line);
+    background: rgba(4, 6, 12, 0.94); backdrop-filter: blur(14px);
+  }
+  .nav-label, .side-foot { display: none; }
+  .nav-btn { flex: none; padding: 8px 10px; white-space: nowrap; }
+  main { padding: 20px 14px 48px; }
+}
+
+.kpi { padding: 16px 18px; }
+.kpi .k-label { font-family: var(--mono); font-size: 9px; letter-spacing: 0.22em; color: var(--dim); text-transform: uppercase; }
+.kpi .k-value { font-family: var(--mono); font-size: 22px; font-weight: 600; color: #fff; margin-top: 8px; letter-spacing: -0.02em; }
+.kpi .k-sub { font-size: 10.5px; color: var(--faint); margin-top: 5px; font-family: var(--mono); }
+.kpi.accent .k-value { color: var(--cyan); }
+.kpi.warn .k-value { color: var(--amber); }
+.kpi.danger .k-value { color: var(--red); }
+
+select.input, input.input, textarea.input {
+  background: var(--panel-solid); border: 1px solid var(--line); border-radius: 7px;
+  color: var(--txt); font-family: var(--mono); font-size: 11px; padding: 9px 12px; outline: none;
+  width: 100%;
+}
+label.rf-label {
+  display: block; font-family: var(--mono); font-size: 9px; letter-spacing: 0.22em;
+  color: var(--dim); text-transform: uppercase; margin-bottom: 7px;
+}
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.form-grid .full { grid-column: 1 / -1; }
+@media (max-width: 700px) { .form-grid { grid-template-columns: 1fr; } }
+.chk { display: flex; align-items: center; gap: 8px; color: var(--txt); font-size: 12px; margin: 6px 0; font-family: var(--mono); }
+.chk input { accent-color: var(--cyan); }
+
+table.data { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.data th {
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--faint); text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line-strong);
+}
+table.data td { padding: 9px 12px; border-bottom: 1px solid rgba(94,234,212,0.05); color: var(--txt); }
+table.data tr { cursor: pointer; }
+table.data tr:hover td { background: rgba(94,234,212,0.03); }
+table.data td.mono { font-family: var(--mono); font-size: 11px; }
+table.data td.dim { color: var(--dim); }
+
+.status-pill { font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em; padding: 3px 9px; border-radius: 20px; border: 1px solid; display: inline-block; }
+.st-ok { color: var(--green); border-color: rgba(52,211,153,0.35); background: rgba(52,211,153,0.07); }
+.st-error { color: var(--red); border-color: rgba(248,113,113,0.35); background: rgba(248,113,113,0.07); }
+.st-running { color: var(--amber); border-color: rgba(251,191,36,0.35); background: rgba(251,191,36,0.07); }
+.st-fail { color: var(--red); border-color: rgba(248,113,113,0.35); background: rgba(248,113,113,0.07); }
+.st-warn { color: var(--amber); border-color: rgba(251,191,36,0.35); background: rgba(251,191,36,0.07); }
+
+.btn {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.18em;
+  padding: 10px 22px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--line-strong); transition: all 0.15s; white-space: nowrap;
+  background: none; color: var(--dim);
+}
+.btn.primary { background: var(--cyan); color: #04121a; border-color: var(--cyan); font-weight: 700; }
+.btn.primary:hover { box-shadow: 0 0 22px rgba(34,211,238,0.45); }
+.btn.primary:disabled, .btn:disabled { opacity: 0.35; cursor: not-allowed; box-shadow: none; }
+.btn.ghost:hover { color: var(--txt); }
+.btn.danger { color: var(--red); border-color: rgba(248,113,113,0.35); }
+.btn.danger:hover { color: #fff; background: rgba(248,113,113,0.12); }
+.control-bar { display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.launch-msg { font-family: var(--mono); font-size: 11px; min-height: 16px; margin-top: 10px; color: var(--dim); }
+.event-log {
+  font-family: var(--mono); font-size: 11px; line-height: 1.7; color: var(--dim);
+  max-height: 320px; overflow-y: auto;
+}
+.event-log .ev { padding: 4px 0; border-bottom: 1px solid rgba(94,234,212,0.04); }
+.event-log .ev b { color: var(--cyan); font-weight: 600; margin-right: 8px; }
+.event-log .ev .t { color: var(--faint); margin-right: 10px; }
+.mono { font-family: var(--mono); }
+.empty { text-align: center; padding: 40px 20px; color: var(--faint); font-family: var(--mono); font-size: 11px; letter-spacing: 0.18em; }
+.foot-note { margin-top: 40px; text-align: center; font-family: var(--mono); font-size: 9px; color: var(--faint); letter-spacing: 0.24em; text-transform: uppercase; }
+.hint { font-size: 11px; color: var(--faint); margin-top: 8px; line-height: 1.5; }
+.honesty {
+  border-left: 3px solid var(--phosphor);
+  background: rgba(24, 242, 42, 0.04);
+  padding: 12px 14px; border-radius: 6px; font-size: 12.5px; line-height: 1.55; color: var(--txt);
+}
+.honesty b { color: var(--phosphor); font-family: var(--mono); font-size: 10px; letter-spacing: 0.18em; display: block; margin-bottom: 6px; }
+.check-row { display: flex; gap: 12px; align-items: baseline; padding: 8px 0; border-bottom: 1px solid rgba(94,234,212,0.05); font-family: var(--mono); font-size: 12px; }
+.check-row .g { width: 18px; flex: none; }
+.check-row .n { width: 220px; color: var(--dim); flex: none; }
+.check-row .d { color: var(--txt); flex: 1; }
+.check-row .f { color: var(--amber); font-size: 11px; margin-top: 4px; }
+.thumb { width: 100%; border-radius: 8px; border: 1px solid var(--line); background: #000; display: block; }
+.media-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 900px) { .media-row { grid-template-columns: 1fr; } }
+.set-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.progress-bar { height: 4px; background: #12203a; border-radius: 2px; overflow: hidden; margin-top: 10px; }
+.progress-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--teal), var(--cyan)); width: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .boot-logo, .live-dot, .view.active { animation: none; }
+}
+</style>
+</head>
+<body>
+<div id="spotlight"></div>
+<div id="grain"></div>
+
+<div id="boot">
+  <div class="boot-logo">VIDEOCORTEX SPARK</div>
+  <div class="boot-bar"><i id="boot-fill"></i></div>
+  <div class="boot-log" id="boot-log">initialising command deck…</div>
+</div>
+
+<header class="top">
+  <svg class="logo-mark" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M20 3 L32.02 7.98 L37 20 L32.02 32.02 L20 37 L7.98 32.02 L3 20 L7.98 7.98 Z" stroke="#22d3ee" stroke-width="1.5"/>
+    <path d="M20 11 C14.8 11 12.2 15.2 12.2 20 C12.2 25.4 15.4 29.2 20 29.2" fill="rgba(94,234,212,0.08)" stroke="#5eead4" stroke-width="1.2"/>
+    <path d="M20 11 C25.2 11 27.8 15.2 27.8 20 C27.8 25.4 24.6 29.2 20 29.2" fill="rgba(34,211,238,0.06)" stroke="#22d3ee" stroke-width="1.2"/>
+    <path d="M20 11 V29.2" stroke="#22d3ee" stroke-width="1.05"/>
+  </svg>
+  <div class="brand">
+    <b>VIDEOCORTEX SPARK</b>
+    <span>GB10 · CUDA 13 · stimulus in · predicted cortex out</span>
+  </div>
+  <div class="top-spacer"></div>
+  <div class="badge" id="badge-device">—</div>
+  <div class="badge warn" id="badge-status">IDLE</div>
+  <div class="clock"><span class="live-dot off" id="live-dot"></span><span id="clock">--:--:-- UTC</span></div>
+</header>
+
+<div class="layout">
+<nav class="side">
+  <div class="nav-label">Deck</div>
+  <button class="nav-btn active" data-view="doctor" type="button">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="8"/><path d="M12 8 v4 l3 2"/></svg>
+    Doctor
+  </button>
+  <button class="nav-btn" data-view="launch" type="button">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+    Launch
+  </button>
+  <button class="nav-btn" data-view="runs" type="button">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h5"/></svg>
+    Runs <span class="count" id="nav-runs">0</span>
+  </button>
+  <button class="nav-btn" data-view="job" type="button">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 19 V5 M4 19 H20"/><path d="M7 15 l4-5 3 3 5-7"/></svg>
+    Job
+  </button>
+  <div class="side-foot">127.0.0.1 only<br>one job at a time<br>CC-BY-NC model</div>
+</nav>
+
+<main>
+<section class="view active" id="view-doctor">
+  <div class="view-head">
+    <h1>PRE<em>FLIGHT</em></h1>
+    <p>What is broken on this machine, before a forty-minute encode finds it for you.</p>
+  </div>
+  <div class="grid g-4" id="doctor-kpis"></div>
+  <div class="panel mt">
+    <div class="panel-title">Checks</div>
+    <div class="control-bar">
+      <div class="set-tabs">
+        <button class="btn primary" type="button" id="scope-renderer">Renderer</button>
+        <button class="btn ghost" type="button" id="scope-model">Model</button>
+      </div>
+      <button class="btn primary" type="button" id="btn-doctor">Run doctor</button>
+    </div>
+    <p class="hint" id="doctor-hint">Renderer scope skips torch. Model scope is the TRIBE path, including the gated Llama.</p>
+    <div id="doctor-list" class="mt"></div>
+  </div>
+</section>
+
+<section class="view" id="view-launch">
+  <div class="view-head">
+    <h1>LAUNCH <em>JOB</em></h1>
+    <p>Encode a clip, or composite a PIP onto a finished run. Overlay does not touch the model.</p>
+  </div>
+  <div class="honesty">
+    <b>Encoding, not decoding</b>
+    Stimulus in, predicted average-subject cortex out. This is not what anyone is thinking, and it is not a reconstruction of the video from a brain.
+  </div>
+  <div class="grid g-2 mt">
+    <div class="panel">
+      <div class="panel-title">Encode · videocortex-spark render</div>
+      <div class="form-grid">
+        <div>
+          <label class="rf-label">Stimulus</label>
+          <select class="input" id="r-kind">
+            <option value="video">video</option>
+            <option value="audio">audio</option>
+            <option value="text">text</option>
+          </select>
+        </div>
+        <div>
+          <label class="rf-label">Device</label>
+          <select class="input" id="r-device"></select>
+        </div>
+        <div class="full">
+          <label class="rf-label">Path on this machine</label>
+          <input class="input" id="r-path" placeholder="/absolute/path/to/clip.mp4" spellcheck="false">
+        </div>
+        <div>
+          <label class="rf-label">Views</label>
+          <select class="input" id="r-views"></select>
+        </div>
+        <div>
+          <label class="rf-label">Max frames (sheet)</label>
+          <input class="input" id="r-max" type="number" min="0" value="60">
+        </div>
+        <div>
+          <label class="rf-label">Stride</label>
+          <input class="input" id="r-stride" type="number" min="1" value="1">
+        </div>
+        <div>
+          <label class="rf-label">Percentile</label>
+          <input class="input" id="r-pct" type="number" min="1" max="100" step="0.5" value="99">
+        </div>
+      </div>
+      <p class="hint">max-frames caps the contact sheet and will widen-stride. It never applies to overlay.</p>
+      <p class="hint" id="hint-render"></p>
+      <button class="btn primary mt" type="button" id="btn-render">Start encode</button>
+      <div class="launch-msg" id="msg-render"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Overlay · PIP on source</div>
+      <div class="form-grid">
+        <div class="full">
+          <label class="rf-label">Run</label>
+          <select class="input" id="o-run"></select>
+        </div>
+        <div>
+          <label class="rf-label">Position</label>
+          <select class="input" id="o-pos">
+            <option value="top-right">top-right</option>
+            <option value="top-left">top-left</option>
+          </select>
+        </div>
+        <div>
+          <label class="rf-label">Lag</label>
+          <select class="input" id="o-lag">
+            <option value="stimulus">stimulus (match the picture)</option>
+            <option value="scanner">scanner (+5 s BOLD)</option>
+          </select>
+        </div>
+        <div>
+          <label class="rf-label">Draft stride</label>
+          <input class="input" id="o-stride" type="number" min="1" value="1">
+        </div>
+        <div>
+          <label class="rf-label">Spin °/s</label>
+          <input class="input" id="o-dps" type="number" min="12" max="48" value="24">
+        </div>
+        <div class="full">
+          <label class="chk"><input type="checkbox" id="o-spin"> 3D spinning globe (both hemispheres, yaw-only)</label>
+          <label class="chk"><input type="checkbox" id="o-monitor" checked> medical-monitor bezel</label>
+          <label class="chk"><input type="checkbox" id="o-ribbon" checked> energy ribbon + playhead</label>
+          <label class="chk"><input type="checkbox" id="o-regions" checked> name top brain regions</label>
+          <label class="chk"><input type="checkbox" id="o-fast"> NVENC encode</label>
+          <label class="chk"><input type="checkbox" id="o-force"> rebuild cards / atlas</label>
+        </div>
+      </div>
+      <p class="hint">Needs predictions.npy on the run. Spin writes overlay_spin.mp4 so it does not clobber the 2×2 overlay.</p>
+      <button class="btn primary mt" type="button" id="btn-overlay">Start overlay</button>
+      <div class="launch-msg" id="msg-overlay"></div>
+    </div>
+  </div>
+</section>
+
+<section class="view" id="view-runs">
+  <div class="view-head">
+    <h1>RUN <em>ARCHIVE</em></h1>
+    <p>Local <span class="mono" id="runs-dir-label">runs/</span> — contact sheets, overlays, manifests.</p>
+  </div>
+  <div class="panel">
+    <div class="panel-title">Runs</div>
+    <div id="runs-table"></div>
+    <div class="launch-msg" id="msg-runs"></div>
+  </div>
+  <div class="panel mt" id="run-detail" hidden>
+    <div class="panel-title" id="run-detail-title">Run</div>
+    <div id="run-detail-body"></div>
+  </div>
+</section>
+
+<section class="view" id="view-job">
+  <div class="view-head">
+    <h1>LIVE <em>JOB</em></h1>
+    <p>One worker. Poll the log; there is no websocket.</p>
+  </div>
+  <div class="panel">
+    <div class="panel-title">Active / last</div>
+    <div id="job-head" class="empty">No job yet.</div>
+    <div class="progress-bar" id="job-bar" hidden><i id="job-bar-fill"></i></div>
+    <div class="event-log mt" id="job-log"></div>
+  </div>
+  <div class="panel mt">
+    <div class="panel-title">History</div>
+    <div id="job-history"></div>
+  </div>
+</section>
+
+<p class="foot-note">videocortex-spark · dgx spark / gb10 · loopback · tribe v2 is cc-by-nc · llama-3.2-3b is gated</p>
+</main>
+</div>
+
+<script>
+const S = {
+  view: "doctor",
+  health: null,
+  defaults: null,
+  doctor: null,
+  doctorScope: "renderer",
+  runs: [],
+  jobs: [],
+  active: null,
+  selectedRun: null,
+  busy: false,
+};
+
+const $ = (id) => document.getElementById(id);
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  const text = await res.text();
+  let body = null;
+  try { body = text ? JSON.parse(text) : null; } catch { body = { raw: text }; }
+  if (!res.ok) {
+    const err = new Error((body && body.error) || res.statusText);
+    err.status = res.status;
+    err.body = body;
+    throw err;
+  }
+  return body;
+}
+
+function show(view) {
+  S.view = view;
+  document.querySelectorAll(".view").forEach((el) => el.classList.toggle("active", el.id === "view-" + view));
+  document.querySelectorAll(".nav-btn").forEach((el) => el.classList.toggle("active", el.dataset.view === view));
+  if (view === "runs" && S.selectedRun) loadRun(S.selectedRun);
+}
+
+function tickClock() {
+  const now = new Date();
+  $("clock").textContent = now.toISOString().slice(11, 19) + " UTC";
+}
+
+function setBusy(busy) {
+  S.busy = busy;
+  const badge = $("badge-status");
+  const dot = $("live-dot");
+  badge.textContent = busy ? "BUSY" : "IDLE";
+  badge.className = "badge " + (busy ? "warn" : "ok");
+  dot.classList.toggle("off", !busy);
+  const encodeReady = !!(S.health && S.health.can_encode);
+  $("btn-render").disabled = busy || !encodeReady;
+  $("btn-overlay").disabled = busy;
+}
+
+function fillSelect(el, values, current) {
+  el.innerHTML = values.map((v) => `<option value="${esc(v)}"${v === current ? " selected" : ""}>${esc(v)}</option>`).join("");
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"'`]/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;",
+  }[c]));
+}
+
+function fmt(n) {
+  if (n == null || n === "") return "—";
+  if (typeof n === "number") return Number.isInteger(n) ? String(n) : n.toFixed(1);
+  return String(n);
+}
+
+async function refresh() {
+  try {
+    const [health, jobs, runs] = await Promise.all([
+      api("/api/health"),
+      api("/api/jobs"),
+      api("/api/runs"),
+    ]);
+    S.health = health;
+    S.jobs = jobs.jobs || [];
+    S.runs = runs.runs || [];
+    S.active = jobs.active_job_id;
+    setBusy(!!health.busy);
+    $("badge-device").textContent = health.device
+      ? (health.device.toUpperCase()
+         + (health.is_gb10 ? " GB10" : "")
+         + (health.torch ? " · torch " + health.torch : ""))
+      : "NO TORCH";
+    $("badge-device").className = "badge " + (health.can_encode ? "ok" : "warn");
+    const hint = $("hint-render");
+    if (hint) {
+      hint.textContent = health.can_encode
+        ? ""
+        : (health.note || "torch / tribev2 missing. ./setup_and_run.sh --predict then restart serve.");
+    }
+    $("nav-runs").textContent = S.runs.length;
+    $("runs-dir-label").textContent = health.runs_dir || "runs/";
+    paintRuns();
+    paintJobs();
+    fillOverlayRuns();
+  } catch (err) {
+    $("badge-status").textContent = "OFFLINE";
+    $("badge-status").className = "badge bad";
+  }
+}
+
+function paintDoctorKpis(doc) {
+  const want = ["python", "render stack", "ffmpeg", "torch"];
+  const map = {};
+  (doc.checks || []).forEach((c) => { map[c.name] = c; });
+  $("doctor-kpis").innerHTML = want.map((name) => {
+    const c = map[name];
+    const st = c ? c.status : "unknown";
+    const cls = st === "ok" ? "accent" : st === "fail" ? "danger" : "warn";
+    return `<div class="panel kpi ${cls}">
+      <div class="k-label">${esc(name)}</div>
+      <div class="k-value">${esc(c ? c.glyph : "?")}</div>
+      <div class="k-sub">${esc(c ? c.detail : "not run")}</div>
+    </div>`;
+  }).join("");
+}
+
+function paintDoctor() {
+  const doc = S.doctor;
+  if (!doc) {
+    $("doctor-list").innerHTML = `<div class="empty">Run doctor.</div>`;
+    return;
+  }
+  paintDoctorKpis(doc);
+  $("doctor-list").innerHTML = (doc.checks || []).map((c) => {
+    const pill = `st-${c.status === "ok" ? "ok" : c.status === "fail" ? "fail" : "warn"}`;
+    const fix = c.fix && c.status !== "ok" ? `<div class="f">→ ${esc(c.fix)}</div>` : "";
+    return `<div class="check-row">
+      <div class="g">${esc(c.glyph)}</div>
+      <div class="n">${esc(c.name)}</div>
+      <div class="d"><span class="status-pill ${pill}">${esc(c.status)}</span> ${esc(c.detail)}${fix}</div>
+    </div>`;
+  }).join("");
+}
+
+async function runDoctor() {
+  $("doctor-list").innerHTML = `<div class="empty">checking…</div>`;
+  try {
+    S.doctor = await api("/api/doctor?scope=" + encodeURIComponent(S.doctorScope));
+    paintDoctor();
+  } catch (err) {
+    $("doctor-list").innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+  }
+}
+
+function paintRuns() {
+  if (!S.runs.length) {
+    $("runs-table").innerHTML = `<div class="empty">No runs in this directory yet.</div>`;
+    return;
+  }
+  const rows = S.runs.map((r) => `<tr data-run="${esc(r.id)}">
+    <td class="mono">${esc(r.id)}</td>
+    <td class="dim">${esc(r.stimulus || "—")}</td>
+    <td class="mono">${fmt(r.n_timesteps)} TR</td>
+    <td class="mono">${fmt(r.seconds)}s</td>
+    <td>${r.has_overlay ? "PIP" : "—"} ${r.has_overlay_spin ? "spin" : ""}</td>
+    <td class="dim">${esc((r.mtime || "").replace("T", " ").replace("+00:00", "Z"))}</td>
+    <td><button class="btn danger" type="button" data-delete="${esc(r.id)}">delete</button></td>
+  </tr>`).join("");
+  $("runs-table").innerHTML = `<table class="data">
+    <thead><tr><th>Run</th><th>Stimulus</th><th>TRs</th><th>Encode</th><th>Overlay</th><th>When</th><th></th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+  $("runs-table").querySelectorAll("tr[data-run]").forEach((tr) => {
+    tr.addEventListener("click", () => loadRun(tr.dataset.run));
+  });
+  $("runs-table").querySelectorAll("button[data-delete]").forEach((btn) => {
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      deleteRun(btn.dataset.delete);
+    });
+  });
+}
+
+function fillOverlayRuns() {
+  const el = $("o-run");
+  const current = el.value;
+  const ids = S.runs.filter((r) => r.has_predictions).map((r) => r.id);
+  if (!ids.length) {
+    el.innerHTML = `<option value="">(no run with predictions.npy)</option>`;
+    return;
+  }
+  fillSelect(el, ids, ids.includes(current) ? current : ids[0]);
+}
+
+async function loadRun(id) {
+  S.selectedRun = id;
+  show("runs");
+  const d = await api("/api/runs/" + encodeURIComponent(id));
+  $("run-detail").hidden = false;
+  $("run-detail-title").textContent = d.id;
+  const m = d.media || {};
+  const sheet = m.contact_sheet
+    ? `<img class="thumb" src="${esc(m.contact_sheet)}" alt="contact sheet">`
+    : "";
+  const vids = [];
+  if (m.overlay) vids.push(`<div><div class="rf-label">overlay.mp4</div><video class="thumb" controls src="${esc(m.overlay)}"></video></div>`);
+  if (m.overlay_spin) vids.push(`<div><div class="rf-label">overlay_spin.mp4</div><video class="thumb" controls src="${esc(m.overlay_spin)}"></video></div>`);
+  $("run-detail-body").innerHTML = `
+    <p class="hint">${esc(d.stimulus || "stimulus")} · ${fmt(d.n_timesteps)} TRs · ${fmt(d.n_vertices)} verts · ${fmt(d.seconds)}s encode</p>
+    ${sheet}
+    <div class="media-row mt">${vids.join("")}</div>
+    <div class="mt control-bar">
+      <button class="btn ghost" type="button" id="btn-overlay-this">Overlay this run</button>
+      <button class="btn danger" type="button" id="btn-delete-this">Delete run</button>
+    </div>`;
+  const btn = $("btn-overlay-this");
+  if (btn) btn.addEventListener("click", () => {
+    $("o-run").value = d.id;
+    show("launch");
+  });
+  const del = $("btn-delete-this");
+  if (del) del.addEventListener("click", () => deleteRun(d.id));
+}
+
+async function deleteRun(id) {
+  if (!id) return;
+  if (!window.confirm("Delete run " + id + "?\nRemoves the folder on disk. Cannot undo.")) return;
+  $("msg-runs").textContent = "deleting " + id + "…";
+  try {
+    await api("/api/runs/" + encodeURIComponent(id), { method: "DELETE" });
+    if (S.selectedRun === id) {
+      S.selectedRun = null;
+      $("run-detail").hidden = true;
+      $("run-detail-body").innerHTML = "";
+    }
+    $("msg-runs").textContent = "deleted " + id;
+    await refresh();
+  } catch (err) {
+    $("msg-runs").textContent = err.message;
+  }
+}
+
+function paintJobs() {
+  const jobs = S.jobs;
+  const active = jobs.find((j) => j.id === S.active) || jobs[0];
+  if (!active) {
+    $("job-head").innerHTML = `<div class="empty">No job yet.</div>`;
+    $("job-log").innerHTML = "";
+    $("job-bar").hidden = true;
+  } else {
+    const pct = active.progress && active.progress.n
+      ? Math.round(100 * active.progress.i / active.progress.n)
+      : (active.status === "ok" ? 100 : 0);
+    $("job-head").innerHTML = `<div class="control-bar">
+      <div><span class="status-pill st-${esc(active.status)}">${esc(active.status)}</span>
+      <b style="margin-left:10px">${esc(active.kind)}</b>
+      <span class="hint"> ${esc(active.id)}</span></div>
+      <div class="hint">${esc(active.error || (active.result && (active.result.out || active.result.out_dir)) || "")}</div>
+    </div>
+    <p class="hint mt">${esc((active.progress && active.progress.label) || "")} ${active.progress && active.progress.n ? active.progress.i + "/" + active.progress.n : ""}</p>`;
+    $("job-bar").hidden = false;
+    $("job-bar-fill").style.width = pct + "%";
+    $("job-log").innerHTML = (active.events || []).slice().reverse().map((e) =>
+      `<div class="ev"><span class="t">${esc((e.at || "").slice(11, 19))}</span><b>${esc(active.kind)}</b>${esc(e.msg)}</div>`
+    ).join("");
+  }
+  if (!jobs.length) {
+    $("job-history").innerHTML = `<div class="empty">Empty.</div>`;
+    return;
+  }
+  $("job-history").innerHTML = `<table class="data"><thead><tr><th>Id</th><th>Kind</th><th>Status</th><th>Started</th></tr></thead><tbody>` +
+    jobs.map((j) => `<tr><td class="mono">${esc(j.id)}</td><td>${esc(j.kind)}</td><td><span class="status-pill st-${esc(j.status)}">${esc(j.status)}</span></td><td class="dim">${esc(j.started_at)}</td></tr>`).join("") +
+    `</tbody></table>`;
+}
+
+async function postJob(path, payload, msgEl) {
+  msgEl.textContent = "submitting…";
+  try {
+    const res = await api(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    msgEl.textContent = "job " + res.job_id;
+    show("job");
+    refresh();
+  } catch (err) {
+    msgEl.textContent = err.message;
+  }
+}
+
+function applyDefaults(d) {
+  S.defaults = d;
+  fillSelect($("r-device"), d.devices || ["auto"], d.device);
+  fillSelect($("r-views"), d.views || ["standard"], (d.render || {}).views || "standard");
+  const r = d.render || {};
+  $("r-max").value = r.max_frames ?? 60;
+  $("r-stride").value = r.stride ?? 1;
+  $("r-pct").value = r.percentile ?? 99;
+  const o = d.overlay || {};
+  $("o-stride").value = o.stride ?? 1;
+  $("o-dps").value = o.dps ?? 24;
+  $("o-monitor").checked = o.monitor !== false;
+  $("o-ribbon").checked = o.ribbon !== false;
+  $("o-regions").checked = o.regions !== false;
+}
+
+async function boot() {
+  const logs = ["binding 127.0.0.1", "loading fsaverage5 notes", "checking static deck", "ready"];
+  const fill = $("boot-fill");
+  for (let i = 0; i < logs.length; i++) {
+    $("boot-log").textContent = logs[i];
+    fill.style.width = ((i + 1) / logs.length * 100) + "%";
+    await new Promise((r) => setTimeout(r, 180));
+  }
+  $("boot").classList.add("done");
+  try { applyDefaults(await api("/api/defaults")); } catch { /* empty */ }
+  await refresh();
+  await runDoctor();
+}
+
+document.querySelectorAll(".nav-btn").forEach((btn) => {
+  btn.addEventListener("click", () => show(btn.dataset.view));
+});
+function setDoctorScope(scope) {
+  S.doctorScope = scope;
+  $("scope-renderer").className = "btn " + (scope === "renderer" ? "primary" : "ghost");
+  $("scope-model").className = "btn " + (scope === "model" ? "primary" : "ghost");
+  $("doctor-hint").textContent = scope === "renderer"
+    ? "Renderer scope skips torch. Draw and overlay work here."
+    : "Model scope: torch, tribev2, uvx, disk, HuggingFace. Llama is gated.";
+}
+$("scope-renderer").addEventListener("click", () => setDoctorScope("renderer"));
+$("scope-model").addEventListener("click", () => setDoctorScope("model"));
+$("btn-doctor").addEventListener("click", runDoctor);
+$("btn-render").addEventListener("click", () => {
+  const kind = $("r-kind").value;
+  const path = $("r-path").value.trim();
+  if (!path) { $("msg-render").textContent = "path is required"; return; }
+  const payload = {
+    [kind]: path,
+    device: $("r-device").value,
+    views: $("r-views").value,
+    max_frames: Number($("r-max").value),
+    stride: Number($("r-stride").value),
+    percentile: Number($("r-pct").value),
+  };
+  postJob("/api/jobs/render", payload, $("msg-render"));
+});
+$("btn-overlay").addEventListener("click", () => {
+  const run = $("o-run").value;
+  if (!run) { $("msg-overlay").textContent = "pick a run"; return; }
+  postJob("/api/jobs/overlay", {
+    run,
+    position: $("o-pos").value,
+    lag_mode: $("o-lag").value,
+    stride: Number($("o-stride").value),
+    dps: Number($("o-dps").value),
+    spin: $("o-spin").checked,
+    monitor: $("o-monitor").checked,
+    ribbon: $("o-ribbon").checked,
+    regions: $("o-regions").checked,
+    fast: $("o-fast").checked,
+    force: $("o-force").checked,
+  }, $("msg-overlay"));
+});
+window.addEventListener("mousemove", (e) => {
+  document.body.style.setProperty("--mx", e.clientX + "px");
+  document.body.style.setProperty("--my", e.clientY + "px");
+});
+setInterval(tickClock, 1000);
+tickClock();
+setInterval(refresh, 1500);
+boot();
+</script>
+</body>
+</html>
