@@ -1,0 +1,9 @@
+{
+  "schema": "videocortex.events.v1",
+  "clip": "counting-task.mp4",
+  "instruction": "count the passes",
+  "unexpected": [
+    {"label": "walker", "t0": 12.4, "t1": 17.1}
+  ],
+  "human_report": []
+}

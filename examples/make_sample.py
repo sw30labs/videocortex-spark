@@ -24,6 +24,9 @@ from videocortex_spark.render import load_fsaverage5
 OUT = Path(__file__).parent / "sample_run" / "predictions.npy"
 N_TR = 12
 SEED = 11
+#: TRIBE v2 TR — the same fallback pipeline.py uses. The sample has no model,
+#: but overlay and sonify both need the TR clock.
+TR_S = 1.49
 
 # Rough fsaverage5 coordinates, right-hemisphere convention; mirrored for left.
 SEEDS = {
@@ -70,4 +73,6 @@ if __name__ == "__main__":
     preds = build()
     OUT.parent.mkdir(parents=True, exist_ok=True)
     np.save(OUT, preds)
+    np.save(OUT.parent / "timestamps.npy", np.arange(N_TR) * TR_S)
     print(f"wrote {OUT}  {preds.shape}  {preds.dtype}")
+    print(f"wrote {OUT.parent / 'timestamps.npy'}  ({N_TR} TRs x {TR_S}s)")

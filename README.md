@@ -43,6 +43,25 @@ someone is thinking"*.
 It is not a drop-in for the Mac tree. Device selection, whisperx, overlay
 encode, batch sizes, and the preflight checks are all GB10-shaped.
 
+### Encoding is not attention
+
+Point the pipeline at a counting-task clip — friends passing a ball, an
+unexpected walker crossing mid-clip — and visual cortex lights up during the
+walker whether or not the viewer ever noticed it. The gorilla is on the
+retina; TRIBE still drives visual cortex. That *is* the demo: encoding is not
+attention, and this tool never claims otherwise. See
+`examples/encode-is-not-attention/` for the recipe — film your own clip, do
+not download anyone else's inattentional-blindness footage.
+
+### Sonify
+
+`videocortex-spark sonify --run runs/clip` writes `cortex.wav`: |predicted
+BOLD| as loudness, one shared scale for the whole run (the colour map's rule,
+applied  to amplitude). Occipital/fusiform/parahippocampal voices are
+Destrieux stand-ins, not a localizer. It is not "what the brain sounds like"
+and it is not a decoder — it is the same prediction, on a channel you can
+hear. `--sonify` on the overlay mixes it under the original audio.
+
 ---
 
 ## Install
