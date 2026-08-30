@@ -119,6 +119,9 @@ class RenderConfig:
     #: Name the top regions per TR under each plate title (Destrieux).
     #: Skips with a warning if the atlas cannot be fetched.
     regions: bool = True
+    #: Footer line on the contact sheet — the events caption when --events is
+    #: given, None otherwise. Text, not a path: the parse happens in the CLI.
+    caption: str | None = None
 
     def view_pairs(self) -> tuple[tuple[str, str], ...]:
         if self.views not in VIEW_PRESETS:
@@ -175,6 +178,17 @@ class OverlayConfig:
     #: Name the top regions per TR in the PIP/card footer (Destrieux).
     #: Skips with a warning if the atlas cannot be fetched.
     regions: bool = True
+    #: videocortex.events.v1 JSON — unexpected-stimulus windows on the
+    #: stimulus clock. Drives ribbon ticks (spin) and the caption.
+    events: Path | None = None
+    #: The honesty lower-third. On by default *when events are present*;
+    #: --no-caption suppresses. Without events there is nothing to say.
+    caption: bool = True
+    #: Mix cortex.wav under the original audio (ducked); the run's own
+    #: sound stays intelligible. Opt-in — default overlay audio is untouched.
+    sonify: bool = False
+    #: Replace the original audio with cortex.wav entirely.
+    sonify_only: bool = False
 
     def view_pairs(self) -> tuple[tuple[str, str], ...]:
         return RenderConfig(views=self.views).view_pairs()

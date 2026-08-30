@@ -1,12 +1,13 @@
 """Command line interface.
 
-Seven verbs:
+Eight verbs:
 
     doctor   what's broken before you waste an hour finding out
     fetch    pull every weight up front
     render   video -> brain-map stills
     draw     saved predictions -> brain-map stills (no model needed)
     overlay  saved run + source video -> PIP animation
+    sonify   saved run -> cortex.wav (|predicted BOLD| as loudness)
     export   saved predictions -> one self-contained interactive 3-D brain
     serve    loopback command deck
 """
@@ -87,6 +88,15 @@ def build_parser() -> argparse.ArgumentParser:
     w = sub.add_parser("draw", help="re-render a saved predictions.npy")
     w.add_argument("predictions", type=Path)
     w.add_argument("-o", "--out", type=Path, default=None)
+    w.add_argument(
+        "--events", type=Path, default=None,
+        help="videocortex.events.v1 JSON — prints the honesty caption on the "
+             "contact sheet (draw has no ribbon, so no ticks)",
+    )
+    w.add_argument(
+        "--no-caption", action="store_true",
+        help="suppress the events caption",
+    )
     _add_render_args(w)
 
     # -- overlay -----------------------------------------------------------
@@ -159,6 +169,49 @@ def build_parser() -> argparse.ArgumentParser:
         help="skip Destrieux region names (also skipped automatically if the "
              "atlas cannot be fetched)",
     )
+    o.add_argument(
+        "--events", type=Path, default=None,
+        help="videocortex.events.v1 JSON — unexpected windows on the stimulus "
+             "clock; ribbon ticks (spin) + the honesty caption",
+    )
+    o.add_argument(
+        "--no-caption", action="store_true",
+        help="suppress the events caption lower-third",
+    )
+    o.add_argument(
+        "--sonify", action="store_true",
+        help="mix cortex.wav under the original audio (ducked, limited)",
+    )
+    o.add_argument(
+        "--sonify-only", action="store_true", dest="sonify_only",
+        help="replace the original audio with cortex.wav",
+    )
+
+    # -- sonify ------------------------------------------------------------
+    y = sub.add_parser(
+        "sonify",
+        help="turn a saved run into cortex.wav — |predicted BOLD| as loudness",
+        epilog="Voices: occipital (L, 196 Hz), fusiform (C, 294 Hz), "
+               "parahippocampal (R, 440 Hz) over a whole-brain bed — "
+               "Destrieux stand-ins, not a localizer. This is |predicted "
+               "BOLD| as loudness, not 'what the brain sounds like'.",
+    )
+    y.add_argument(
+        "--run", type=Path, required=True,
+        help="run directory with predictions.npy + timestamps.npy",
+    )
+    y.add_argument(
+        "--video", type=Path, default=None,
+        help="source video — sets the wav duration (default: TR clock)",
+    )
+    y.add_argument("-o", "--out", type=Path, default=None,
+                   help="default: <run>/cortex.wav")
+    y.add_argument(
+        "--lag-mode", choices=("stimulus", "scanner"), default="stimulus",
+        help="stimulus = match the picture (default); scanner = +5 s BOLD delay",
+    )
+    y.add_argument("--percentile", type=float, default=99.0)
+    y.add_argument("--threshold-frac", type=float, default=0.25)
 
     # -- export ------------------------------------------------------------
     x = sub.add_parser(
@@ -307,9 +360,42 @@ def cmd_render(a: argparse.Namespace) -> int:
 def cmd_draw(a: argparse.Namespace) -> int:
     from videocortex_spark import pipeline
 
+    cfg = _render_cfg(a)
+    if a.events is not None:
+        from videocortex_spark.events import CAPTION, EventsError, load_events
+
+        try:
+            load_events(a.events)  # validate now — not after a render
+        except EventsError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+        if not a.no_caption:
+            cfg.caption = CAPTION
     out = a.out or a.predictions.parent
-    result = pipeline.render_only(a.predictions, out, _render_cfg(a))
+    result = pipeline.render_only(a.predictions, out, cfg)
     _report(result)
+    return 0
+
+
+def cmd_sonify(a: argparse.Namespace) -> int:
+    from videocortex_spark.sonify import SonifyError, sonify_from_run
+
+    try:
+        result = sonify_from_run(
+            a.run,
+            video=a.video,
+            lag_mode=a.lag_mode,
+            percentile=a.percentile,
+            threshold_frac=a.threshold_frac,
+            out=a.out,
+        )
+    except SonifyError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    voices = ", ".join(result.voices) if result.voices else "whole-brain bed only"
+    print(f"\n  cortex wav ->  {result.wav}  ({result.duration:.1f}s, {voices})")
+    print(f"  tracks     ->  {result.tracks}")
+    print("  |predicted BOLD| as loudness — not what a brain sounds like.\n")
     return 0
 
 
@@ -436,6 +522,10 @@ def cmd_overlay(a: argparse.Namespace) -> int:
         monitor=not a.no_monitor,
         ribbon=not a.no_ribbon,
         regions=not a.no_regions,
+        events=a.events,
+        caption=not a.no_caption,
+        sonify=a.sonify,
+        sonify_only=a.sonify_only,
     )
     try:
         result = overlay_from_run(
@@ -486,6 +576,7 @@ def main(argv: list[str] | None = None) -> int:
         "render": cmd_render,
         "draw": cmd_draw,
         "overlay": cmd_overlay,
+        "sonify": cmd_sonify,
         "export": cmd_export,
         "serve": cmd_serve,
     }

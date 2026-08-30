@@ -112,6 +112,33 @@ def test_export_accepts_a_positional_predictions_path():
     assert str(a.out) == "b.html"
 
 
+def test_sonify_parses_run_and_defaults():
+    a = build_parser().parse_args(["sonify", "--run", "runs/clip"])
+    assert a.command == "sonify"
+    assert a.lag_mode == "stimulus"
+    assert a.video is None
+    assert a.out is None
+    assert a.percentile == 99.0
+    assert a.threshold_frac == 0.25
+
+
+def test_overlay_events_and_sonify_flags_default_off():
+    a = build_parser().parse_args(["overlay", "--run", "runs/clip"])
+    assert a.events is None
+    assert a.no_caption is False
+    assert a.sonify is False
+    assert a.sonify_only is False
+
+
+def test_overlay_accepts_events_and_sonify():
+    a = build_parser().parse_args(
+        ["overlay", "--run", "runs/clip", "--events", "runs/clip/events.json",
+         "--sonify"]
+    )
+    assert str(a.events) == "runs/clip/events.json"
+    assert a.sonify is True
+
+
 def test_export_cli_needs_run_or_predictions(capsys):
     from videocortex_spark.cli import main
 
