@@ -15,13 +15,13 @@ keywords = ["fmri", "brain-encoding", "neuroscience", "tribe", "fsaverage5", "dg
 # Deliberately light. The renderer only needs the neuroimaging stack, so
 # `videocortex-spark draw` works on a machine that has never seen torch.
 dependencies = [
-  "numpy>=2.1",
-  "nilearn>=0.11",
-  "nibabel>=5.1",
-  "matplotlib>=3.8",
-  "scipy>=1.11",
-  "pillow>=10",
-  "huggingface_hub>=0.30",
+  "numpy==2.5.4",
+  "nilearn==0.14.1",
+  "nibabel==5.4.2",
+  "matplotlib==3.11.2",
+  "scipy==1.18.1",
+  "pillow==13.0.0",
+  "huggingface_hub==2.4.0",
 ]
 
 [project.optional-dependencies]
@@ -35,8 +35,8 @@ predict = [
   "tribev2 @ git+https://github.com/facebookresearch/tribev2.git",
 ]
 dev = [
-  "pytest>=8.0",
-  "pytest-cov",
+  "pytest==9.2.0",
+  "pytest-cov==7.1.0",
 ]
 
 [project.scripts]
